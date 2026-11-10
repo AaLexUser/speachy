@@ -1,0 +1,23 @@
+[package]
+name = "speachy-core"
+description = "Local TTS engine, model manager and streaming speech pipeline behind Speachy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow = "1"
+bzip2 = "0.6"
+log = "0.4"
+rodio = { version = "0.23", default-features = false, features = ["playback"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sherpa-onnx = "2.0.1"
+tar = "0.4"
+thiserror = "2"
+ureq = { version = "3", default-features = false, features = ["native-tls", "gzip"] }
+whatlang = "0.18"
+
+[dev-dependencies]
+tempfile = "3"

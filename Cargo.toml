@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+members = ["crates/speachy-core", "src-tauri"]
+default-members = ["crates/speachy-core"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/AaLexUser/speachy"
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
+strip = true
+
+# TTS inference runs in the prebuilt sherpa-onnx library, but text chunking,
+# resampling and sample conversion are ours: keep them fast in `cargo run`.
+[profile.dev.package.speachy-core]
+opt-level = 2
