@@ -28,15 +28,13 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       # sherpa-onnx-sys downloads its prebuilt library into
-      # target/sherpa-onnx-prebuilt. The cache keeps that directory but not
-      # its contents, and keeps the build-script output that points into it.
-      # Without the library, make the build script run again.
-      - name: Re-fetch the sherpa-onnx library if the cache dropped it
+      # target/sherpa-onnx-prebuilt, and skips the download when the extracted
+      # directory exists. The cache restores that directory without the
+      # library files in it, which breaks linking. Start it from scratch on
+      # every run instead: a 20 MB download.
+      - name: Fetch the sherpa-onnx library afresh
         shell: bash
-        run: |
-          if ! find target/sherpa-onnx-prebuilt -name 'libsherpa-onnx-c-api.*' 2>/dev/null | grep -q .; then
-            rm -rf target/*/build/sherpa-onnx-sys-* target/*/.fingerprint/sherpa-onnx-sys-*
-          fi
+        run: rm -rf target/sherpa-onnx-prebuilt target/*/build/sherpa-onnx-sys-* target/*/.fingerprint/sherpa-onnx-sys-*
       - run: cargo fmt --all --check
       - name: Engine and CLI stay free of UI dependencies
         run: scripts/check-layers.sh
@@ -51,15 +49,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # sherpa-onnx-sys downloads its prebuilt library into
-      # target/sherpa-onnx-prebuilt. The cache keeps that directory but not
-      # its contents, and keeps the build-script output that points into it.
-      # Without the library, make the build script run again.
-      - name: Re-fetch the sherpa-onnx library if the cache dropped it
+      # target/sherpa-onnx-prebuilt, and skips the download when the extracted
+      # directory exists. The cache restores that directory without the
+      # library files in it, which breaks linking. Start it from scratch on
+      # every run instead: a 20 MB download.
+      - name: Fetch the sherpa-onnx library afresh
         shell: bash
-        run: |
-          if ! find target/sherpa-onnx-prebuilt -name 'libsherpa-onnx-c-api.*' 2>/dev/null | grep -q .; then
-            rm -rf target/*/build/sherpa-onnx-sys-* target/*/.fingerprint/sherpa-onnx-sys-*
-          fi
+        run: rm -rf target/sherpa-onnx-prebuilt target/*/build/sherpa-onnx-sys-* target/*/.fingerprint/sherpa-onnx-sys-*
       - name: Test the engine and the CLI
         run: cargo test -p speachy-core -p speachy-cli
       - name: Install the Tauri CLI
