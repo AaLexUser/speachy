@@ -45,7 +45,7 @@ pub trait Synthesizer: Send + Sync {
 
 /// Identifies a loaded engine: a model plus the voice variant it was loaded
 /// for (see [`crate::catalog::VoiceInfo::variant`]).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
 pub struct EngineKey {
     pub model_id: String,
     pub variant: Option<String>,
@@ -56,6 +56,8 @@ pub trait EngineProvider: Send + Sync {
     fn engine(&self, key: &EngineKey) -> Result<Arc<dyn Synthesizer>>;
     /// Whether [`EngineProvider::engine`] would return without loading.
     fn is_loaded(&self, key: &EngineKey) -> bool;
+    /// Lets go of everything loaded for a model that is being removed.
+    fn unload_model(&self, _model_id: &str) {}
 }
 
 pub struct SherpaEngine {
@@ -270,14 +272,6 @@ impl EngineCache {
         self.loaded.lock().unwrap().clear();
     }
 
-    /// Drops the engines of one model (it is being deleted).
-    pub fn unload_model(&self, model_id: &str) {
-        self.loaded
-            .lock()
-            .unwrap()
-            .retain(|(k, _)| k.model_id != model_id);
-    }
-
     pub fn loaded_keys(&self) -> Vec<EngineKey> {
         self.loaded
             .lock()
@@ -323,5 +317,12 @@ impl EngineProvider for EngineCache {
 
     fn is_loaded(&self, key: &EngineKey) -> bool {
         self.loaded.lock().unwrap().iter().any(|(k, _)| k == key)
+    }
+
+    fn unload_model(&self, model_id: &str) {
+        self.loaded
+            .lock()
+            .unwrap()
+            .retain(|(k, _)| k.model_id != model_id);
     }
 }

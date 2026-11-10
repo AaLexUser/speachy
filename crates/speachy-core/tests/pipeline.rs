@@ -20,6 +20,8 @@ struct FakeEngine {
     delay: Duration,
     /// For every call: (chunk number, chunks that had started playing).
     calls: Mutex<Vec<(usize, usize)>>,
+    /// Calls that have returned.
+    returned: AtomicUsize,
     started_playing: Arc<AtomicUsize>,
     loaded: AtomicBool,
 }
@@ -40,6 +42,7 @@ impl Synthesizer for FakeEngine {
             .unwrap()
             .push((n, self.started_playing.load(Ordering::SeqCst)));
         std::thread::sleep(self.delay);
+        self.returned.fetch_add(1, Ordering::SeqCst);
         if cancel.load(Ordering::Relaxed) {
             return Ok(None);
         }
@@ -79,6 +82,7 @@ fn rig(secs: f32, delay_ms: u64, time_scale: f32) -> Rig {
         secs,
         delay: Duration::from_millis(delay_ms),
         calls: Mutex::default(),
+        returned: AtomicUsize::new(0),
         started_playing: started_playing.clone(),
         loaded: AtomicBool::new(false),
     });
@@ -425,4 +429,23 @@ fn loading_a_model_is_reported_before_the_first_chunk() {
             State::Idle
         ]
     );
+}
+
+#[test]
+fn shutdown_waits_for_synthesis_in_flight() {
+    // Each synthesis call takes 300 ms and cannot be interrupted.
+    let rig = rig(1.0, 300, 1.0);
+    rig.speaker.speak(plan("chunk", 5), opts(60.0));
+    rig.wait_for(|e| matches!(e, SpeechEvent::ChunkPlaying { index: 0, .. }));
+
+    // A call is in flight now. After shutdown none is, and none starts.
+    assert!(rig.speaker.shutdown(Duration::from_secs(5)));
+    let started = rig.engine.calls.lock().unwrap().len();
+    assert_eq!(rig.engine.returned.load(Ordering::SeqCst), started);
+    std::thread::sleep(Duration::from_millis(400));
+    assert_eq!(rig.engine.calls.lock().unwrap().len(), started);
+    assert_eq!(rig.speaker.state(), State::Idle);
+
+    // With nothing running it returns at once.
+    assert!(rig.speaker.shutdown(Duration::ZERO));
 }

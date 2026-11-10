@@ -110,6 +110,31 @@ impl Settings {
         std::fs::rename(&tmp, path)
     }
 
+    /// Returns these settings with the fields of `patch` replaced.
+    /// `shortcuts` merges field by field; every other field is replaced
+    /// whole. Unknown fields and values of the wrong type are errors.
+    pub fn merged(&self, patch: serde_json::Value) -> Result<Settings, String> {
+        let serde_json::Value::Object(patch) = patch else {
+            return Err("a settings update must be a JSON object".into());
+        };
+        let mut merged = serde_json::to_value(self).map_err(|err| err.to_string())?;
+        for (key, value) in patch {
+            match (merged.get_mut(&key), value) {
+                (Some(serde_json::Value::Object(target)), serde_json::Value::Object(fields))
+                    if key == "shortcuts" =>
+                {
+                    target.extend(fields)
+                }
+                (Some(slot), value) => *slot = value,
+                (None, _) => return Err(format!("unknown setting {key}")),
+            }
+        }
+        let mut new: Settings =
+            serde_json::from_value(merged).map_err(|err| format!("invalid settings: {err}"))?;
+        new.sanitize();
+        Ok(new)
+    }
+
     pub fn sanitize(&mut self) {
         let finite = |v: f32, default: f32| if v.is_finite() { v } else { default };
         self.speed = finite(self.speed, 1.0).clamp(0.5, 2.5);
@@ -175,5 +200,39 @@ mod tests {
 
         std::fs::write(&path, "{ not json").unwrap();
         assert_eq!(Settings::load(&path), Settings::default());
+    }
+
+    #[test]
+    fn merging_replaces_only_the_given_fields() {
+        use serde_json::json;
+        let old = Settings::default();
+        let new = old
+            .merged(json!({
+                "speed": 1.5,
+                "default_voice": { "model_id": "supertonic-3", "voice_id": "M2" },
+                "shortcuts": { "stop": "F9" },
+            }))
+            .unwrap();
+        assert_eq!(new.speed, 1.5);
+        assert_eq!(new.default_voice.as_ref().unwrap().voice_id, "M2");
+        // Shortcuts not mentioned keep their value.
+        assert_eq!(new.shortcuts.stop, "F9");
+        assert_eq!(new.shortcuts.speak_selection, old.shortcuts.speak_selection);
+        assert_eq!(new.volume, old.volume);
+
+        let cleared = new.merged(json!({ "default_voice": null })).unwrap();
+        assert_eq!(cleared.default_voice, None);
+        assert_eq!(cleared.speed, 1.5);
+    }
+
+    #[test]
+    fn merging_rejects_bad_updates_and_clamps_values() {
+        use serde_json::json;
+        let old = Settings::default();
+        assert!(old.merged(json!({ "no_such_setting": 1 })).is_err());
+        assert!(old.merged(json!({ "speed": "fast" })).is_err());
+        assert!(old.merged(json!([1, 2])).is_err());
+        assert_eq!(old.merged(json!({ "speed": 99 })).unwrap().speed, 2.5);
+        assert_eq!(old.merged(json!({ "language_voices": {} })).unwrap(), old);
     }
 }

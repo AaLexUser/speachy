@@ -46,6 +46,7 @@ listen("notice", ({ payload }) => {
   render();
 });
 
-document.getElementById("pause").addEventListener("click", () => invoke("toggle_pause"));
-document.getElementById("stop").addEventListener("click", () => invoke("stop"));
+const engine = (cmd) => invoke("engine", { command: { cmd } });
+document.getElementById("pause").addEventListener("click", () => engine("toggle_pause"));
+document.getElementById("stop").addEventListener("click", () => engine("stop"));
 render();

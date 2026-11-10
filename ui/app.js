@@ -88,14 +88,21 @@ async function call(command, args) {
   }
 }
 
+/** Runs an engine command: the same commands the CLI and `serve` take. */
+const engine = (cmd, args = {}) => call("engine", { command: { cmd, ...args } });
+
 async function refresh() {
-  S.snap = await invoke("get_snapshot");
+  const [snapshot, shell] = await Promise.all([
+    invoke("engine", { command: { cmd: "snapshot" } }),
+    invoke("shell_info"),
+  ]);
+  S.snap = { ...snapshot, ...shell };
   S.speech.state = S.snap.speech_state;
   render();
 }
 
 async function saveSettings(patch, { rerender = true } = {}) {
-  const result = await call("update_settings", { patch });
+  const result = await engine("update_settings", { patch });
   S.snap.settings = result.settings;
   S.shortcutErrors = result.shortcut_errors;
   if (result.shortcut_errors.length) toast(result.shortcut_errors[0], "error");
@@ -429,7 +436,7 @@ function preview(modelId, voiceId, lang) {
   // Preview in the user's language when the voice speaks it.
   const preferred = lang || S.snap.settings.language;
   const code = voice.languages.includes(preferred) ? preferred : voice.languages[0];
-  call("speak_text", { text: window.SAMPLES[code] || window.SAMPLES.en, voice: { model_id: modelId, voice_id: voiceId }, lang: code });
+  engine("speak", { text: window.SAMPLES[code] || window.SAMPLES.en, voice: { model_id: modelId, voice_id: voiceId }, lang: code });
 }
 
 const ACTIONS = {
@@ -443,24 +450,24 @@ const ACTIONS = {
     else toast("Enable Speachy under Privacy & Security → Accessibility, then come back.");
   },
   speak: async () => {
-    if (S.speech.state !== "idle") return call("stop");
+    if (S.speech.state !== "idle") return engine("stop");
     const text = document.getElementById("try-text").value.trim();
     if (!text) return toast("Type some text first.");
-    await call("speak_text", { text, voice: null, lang: null });
+    await engine("speak", { text });
   },
-  pause: () => call("toggle_pause"),
+  pause: () => engine("toggle_pause"),
   install: async (el) => {
     const model = modelById(el.dataset.id);
     model.installing = true;
     render();
-    await call("install_model", { id: el.dataset.id }).catch(refresh);
+    await engine("install_model", { id: el.dataset.id }).catch(refresh);
   },
-  "cancel-install": (el) => call("cancel_install", { id: el.dataset.id }),
+  "cancel-install": (el) => engine("cancel_install", { id: el.dataset.id }),
   remove: async (el) => {
     const model = modelById(el.dataset.id);
     if (!window.confirm(`Remove ${model.name} and its voices from this computer?`)) return;
-    S.snap = await call("remove_model", { id: el.dataset.id });
-    render();
+    await engine("remove_model", { id: el.dataset.id });
+    await refresh();
   },
   "voice-model": (el) => {
     S.voiceModel = el.dataset.id;

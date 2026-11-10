@@ -107,8 +107,8 @@ selection ──► clean up ──► chunks ──► language + voice per chu
    characters: as long as synthesis is at least twice as fast as playback, a
    chunk is always ready before it is needed.
 3. **Language and voice** (`lang.rs`, `plan.rs`). The language of the whole
-   text and of each sufficiently long chunk is detected from its script,
-   common words and letter statistics. Each chunk then gets a voice: your
+   text and of each chunk is detected from its script, common words and
+   letter statistics (a change of script always starts a new chunk). Each chunk then gets a voice: your
    choice for that language, else the default voice if it speaks the
    language, else any installed model that does.
 4. **Synthesis ahead of playback** (`pipeline.rs`). A worker synthesizes the
@@ -127,47 +127,53 @@ For English with Kokoro, words are converted to phonemes by
 phonemizer Kokoro was trained with (`english.rs`); words it does not know are
 sounded out by spelling rules rather than skipped.
 
-## Repository layout
+## Engine and interface
+
+The engine is a library with no user-interface dependencies; the desktop app
+is a thin shell around it. Everything the app does is an engine command, and
+the same commands are available from a terminal, which makes the engine easy
+to script, debug and test without a window, a screen or a sound card.
 
 ```
-crates/speachy-core/   Engine, model manager and pipeline; no GUI dependencies
+crates/speachy-core/   The engine
+  src/session.rs         the front door: commands in, events out
   src/catalog.rs         downloadable models and their voices
   src/models.rs          download (resumable), unpack, remove
   src/text.rs            cleaning and chunking
   src/lang.rs            language detection
-  src/plan.rs            voice selection per chunk
+  src/plan.rs            language and voice for each chunk
   src/engine.rs          sherpa-onnx synthesis, loaded-model cache
+  src/english.rs         English phonemes for Kokoro
   src/pipeline.rs        synthesize-ahead pipeline, pause / stop
   src/audio.rs           gapless output queue
-  examples/speak.rs      command-line front end
-  tests/pipeline.rs      pipeline behaviour with a fake engine and sound card
-src-tauri/             The desktop app (Tauri 2): tray, shortcuts, selection,
-                       windows, commands
-ui/                    Settings window and overlay pill
-scripts/make_icons.py  Regenerates the icons
+crates/speachy-cli/    Headless front end: subcommands and a JSON channel
+src-tauri/             The desktop shell (Tauri 2): windows, menu-bar icon,
+                       shortcuts, reading the selection
+ui/                    Settings window and overlay pill (no build step)
 ```
-
-## Command line
-
-The pipeline can be used without the app, which is handy for trying models
-and measuring timing:
 
 ```sh
-cd crates/speachy-core
-cargo run --release --example speak -- --list
-cargo run --release --example speak -- --install supertonic-3
-cargo run --release --example speak -- "Hello from Speachy."
-cargo run --release --example speak -- --voice M2 --out hello.wav "Hello."
+cargo build --release -p speachy-cli      # target/release/speachy-cli
+
+speachy-cli models                         # what can be installed, what is
+speachy-cli install supertonic-3
+speachy-cli plan "Hello. Привет, как дела?"   # chunks, language and voice of each
+speachy-cli speak "Hello from Speachy."
+speachy-cli speak --voice M2 --out hello.wav "Hello."
+speachy-cli run '{"cmd":"snapshot"}'       # any engine command, as the app sends it
+speachy-cli serve                          # JSON commands on stdin, replies and events on stdout
 ```
 
-Models go to `./models` unless `--models DIR` or `SPEACHY_MODELS` says
-otherwise.
+The CLI works on the same models and settings as the app unless `--home DIR`
+is given. [AGENTS.md](AGENTS.md) lists the commands and events and describes
+how to work on the engine headlessly.
 
 ## Development
 
 ```sh
-cargo test --workspace     # unit tests and pipeline tests
-cargo clippy --workspace --all-targets
+cargo test --workspace                          # everything
+cargo test -p speachy-core -p speachy-cli       # engine and CLI only; needs no GUI libraries
+cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 The app also builds and runs on Linux (X11), where the shortcut reads the
@@ -176,9 +182,9 @@ primary selection. Building there needs the Tauri prerequisites plus
 
 ## Status and known limitations
 
-This is a first version. The core (chunking, language detection, downloads,
-the pipeline) is covered by tests, and the whole app has been run end to end
-on Linux. The macOS-specific code — reading the selection through the
+This is a first version. The engine (chunking, language detection, downloads,
+the pipeline, the command surface) is covered by tests, and the whole app has
+been run end to end on Linux. The macOS-specific code — reading the selection through the
 Accessibility API and the clipboard, the menu-bar icon, the overlay pill —
 compiles for macOS but **has not yet been exercised on a Mac**; expect to
 find rough edges there first.

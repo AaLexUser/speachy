@@ -98,12 +98,12 @@ pub fn handle(app: &AppHandle, shortcut: &Shortcut, event: ShortcutEvent) {
 }
 
 pub fn run(app: &AppHandle, action: Action) {
-    let state = app.state::<AppState>();
+    let session = &app.state::<AppState>().session;
     match action {
         Action::SpeakSelection => speech::speak_selection(app),
-        Action::PauseResume => state.speaker.toggle_pause(),
+        Action::PauseResume => session.toggle_pause(),
         Action::Stop => {
-            state.speaker.stop();
+            session.stop();
         }
     }
 }

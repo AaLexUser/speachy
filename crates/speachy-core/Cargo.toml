@@ -8,6 +8,7 @@ repository.workspace = true
 [dependencies]
 anyhow = "1"
 bzip2 = "0.6"
+dirs = "7"
 log = "0.4"
 rodio = { version = "0.23", default-features = false, features = ["playback"] }
 serde = { version = "1", features = ["derive"] }

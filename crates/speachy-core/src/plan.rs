@@ -13,9 +13,7 @@ pub struct PlannedChunk {
     pub boundary: Boundary,
     /// ISO 639-1 language the chunk is read in.
     pub lang: String,
-    #[serde(skip)]
     pub engine: EngineKey,
-    #[serde(skip)]
     pub sid: i32,
     pub model_id: String,
     pub voice_id: String,
@@ -35,8 +33,9 @@ struct Choice<'a> {
 }
 
 /// Chunks shorter than this inherit the language of the whole text: a
-/// handful of words is not enough for reliable identification.
-const MIN_WEIGHT_FOR_OWN_LANGUAGE: usize = 40;
+/// couple of words is not enough to tell a language, however confident the
+/// detector is.
+const MIN_WEIGHT_FOR_OWN_LANGUAGE: usize = 20;
 
 /// Plans how to speak `text` with the `installed` models.
 pub fn plan(
@@ -69,17 +68,13 @@ pub fn plan(
     } else {
         None
     }
-    .unwrap_or(fallback_lang);
+    .unwrap_or_else(|| fallback_lang.clone());
 
     Ok(chunks
         .into_iter()
         .map(|chunk| {
-            let lang = if settings.auto_detect_language
-                && text::weight(&chunk.text) >= MIN_WEIGHT_FOR_OWN_LANGUAGE
-            {
-                detect(&chunk.text)
-                    .filter(|d| d.reliable)
-                    .map_or(text_lang.clone(), |d| d.code.to_string())
+            let lang = if settings.auto_detect_language {
+                chunk_language(&chunk.text, detect(&chunk.text), &text_lang, &fallback_lang)
             } else {
                 text_lang.clone()
             };
@@ -98,6 +93,29 @@ pub fn plan(
             }
         })
         .collect())
+}
+
+/// The language of one chunk, given what the detector saw in it, the
+/// language of the text around it and the user's own language.
+fn chunk_language(
+    chunk: &str,
+    own: Option<crate::lang::Detected>,
+    text_lang: &str,
+    user_lang: &str,
+) -> String {
+    use crate::lang::fits_language;
+    let long_enough = text::weight(chunk) >= MIN_WEIGHT_FOR_OWN_LANGUAGE;
+    match own {
+        // Strong evidence in a chunk long enough to carry it.
+        Some(own) if own.reliable && long_enough => own.code.to_string(),
+        _ if fits_language(chunk, text_lang) => text_lang.to_string(),
+        // The chunk cannot be written in the surrounding language (Latin
+        // text inside a Russian document): weak evidence beats none, and
+        // the user's language beats a language of the wrong script.
+        Some(own) => own.code.to_string(),
+        None if fits_language(chunk, user_lang) => user_lang.to_string(),
+        None => text_lang.to_string(),
+    }
 }
 
 fn lookup<'a>(voice: &VoiceRef, installed: &[&'a ModelInfo]) -> Option<Choice<'a>> {
@@ -293,6 +311,19 @@ mod tests {
         settings.default_voice = Some(voice("supertonic-3", "M2"));
         let planned = plan(EN, &settings, &[kitten]).unwrap();
         assert_eq!(planned[0].model_id, "kitten-nano-v0.2");
+    }
+
+    #[test]
+    fn a_short_sentence_in_another_script_keeps_its_own_language() {
+        let supertonic = find("supertonic-3").unwrap();
+        let text = format!("Hello there, this is a test. {RU} Thanks!");
+        let planned = plan(&text, &Settings::default(), &[supertonic]).unwrap();
+        let langs: Vec<&str> = planned.iter().map(|c| c.lang.as_str()).collect();
+        assert_eq!(langs.first(), Some(&"en"), "{planned:?}");
+        assert!(langs.contains(&"ru"));
+        // One word is too little to identify, but it is not Russian: the
+        // user's language applies.
+        assert_eq!(langs.last(), Some(&"en"), "{planned:?}");
     }
 
     #[test]

@@ -1,10 +1,9 @@
-//! Glue between user actions and the speech pipeline.
+//! The shell's side of speaking: reading the selection and telling the user
+//! what happened. The speaking itself is the engine's.
 
 use crate::selection;
 use crate::state::AppState;
-use speachy_core::pipeline::SpeakOptions;
-use speachy_core::plan::{self, PlanError};
-use speachy_core::settings::VoiceRef;
+use speachy_core::pipeline::State;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -14,7 +13,7 @@ pub fn notice(app: &AppHandle, message: &str) {
     log::info!("notice: {message}");
     let _ = app.emit("notice", message);
     let state = app.state::<AppState>();
-    if !state.settings.read().unwrap().show_overlay {
+    if !state.session.settings().show_overlay {
         return;
     }
     // Surface the message on the pill for a moment, even when idle.
@@ -36,71 +35,42 @@ pub fn hide_overlay_when_done(app: &AppHandle) {
         .lock()
         .unwrap()
         .is_some_and(|until| Instant::now() < until);
-    if !notice_showing && state.speaker.state() == speachy_core::pipeline::State::Idle {
+    if !notice_showing && state.session.speech_state() == State::Idle {
         crate::windows::hide_overlay(app);
     }
 }
 
-/// Speaks `text`. With `voice`, that exact voice is used (for previews);
-/// otherwise voices follow the user's settings and the detected language.
-///
-/// With `lang`, the text is read in that language instead of detecting it.
-pub fn speak(
-    app: &AppHandle,
-    text: &str,
-    voice: Option<VoiceRef>,
-    lang: Option<String>,
-) -> Result<(), String> {
-    let state = app.state::<AppState>();
-    let mut settings = state.settings.read().unwrap().clone();
-    if let Some(voice) = voice {
-        settings.language_voices.clear();
-        settings.default_voice = Some(voice);
-    }
-    if let Some(lang) = lang {
-        settings.auto_detect_language = false;
-        settings.language = lang;
-    }
-    let installed = state.models.installed();
-    let chunks = plan::plan(text, &settings, &installed).map_err(|err| {
-        if err == PlanError::NoModel {
+/// Speaks `text` with the user's voices, reporting a failure as a notice.
+fn speak(app: &AppHandle, text: &str) {
+    let session = &app.state::<AppState>().session;
+    if let Err(message) = session.speak(text, None, None) {
+        if session.installed().is_empty() {
             // Nothing to speak with yet: take the user to the downloads.
             crate::windows::show_main(app);
         }
-        err.to_string()
-    })?;
-    state.speaker.speak(
-        chunks,
-        SpeakOptions {
-            speed: settings.speed,
-            volume: settings.volume,
-            lookahead: Duration::from_secs_f32(settings.lookahead_secs),
-        },
-    );
-    Ok(())
+        notice(app, &message);
+    }
 }
 
 /// The shortcut action: speak the selection, or stop if there is nothing
 /// new to say.
 pub fn speak_selection(app: &AppHandle) {
     let state = app.state::<AppState>();
-    let active = state.speaker.is_active();
+    let active = state.session.is_speaking();
     let selected = selection::selected_text();
     let mut last = state.last_selection.lock().unwrap();
     match selected {
         // Pressing the shortcut again on the same selection stops.
         Some(text) if active && *last == text => {
-            state.speaker.stop();
+            state.session.stop();
         }
         Some(text) => {
             *last = text.clone();
             drop(last);
-            if let Err(message) = speak(app, &text, None, None) {
-                notice(app, &message);
-            }
+            speak(app, &text);
         }
         None if active => {
-            state.speaker.stop();
+            state.session.stop();
         }
         None => {
             drop(last);
@@ -119,33 +89,7 @@ pub fn speak_selection(app: &AppHandle) {
 
 pub fn speak_clipboard(app: &AppHandle) {
     match selection::clipboard_text() {
-        Some(text) => {
-            if let Err(message) = speak(app, &text, None, None) {
-                notice(app, &message);
-            }
-        }
+        Some(text) => speak(app, &text),
         None => notice(app, "The clipboard has no text"),
     }
-}
-
-/// Loads the model of the default voice in the background, so the first
-/// request does not wait for it.
-pub fn preload(app: &AppHandle) {
-    let app = app.clone();
-    std::thread::spawn(move || {
-        let state = app.state::<AppState>();
-        let settings = state.settings.read().unwrap().clone();
-        if !settings.preload_model {
-            return;
-        }
-        let installed = state.models.installed();
-        // Plan a token text to find out which engine the default voice uses.
-        let Ok(chunks) = plan::plan("preload", &settings, &installed) else {
-            return;
-        };
-        use speachy_core::engine::EngineProvider;
-        if let Err(err) = state.engines.engine(&chunks[0].engine) {
-            log::warn!("could not preload {}: {err:#}", chunks[0].model_id);
-        }
-    });
 }

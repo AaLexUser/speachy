@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["crates/speachy-core", "src-tauri"]
-default-members = ["crates/speachy-core"]
+members = ["crates/speachy-core", "crates/speachy-cli", "src-tauri"]
+default-members = ["crates/speachy-core", "crates/speachy-cli"]
 
 [workspace.package]
 version = "0.1.0"

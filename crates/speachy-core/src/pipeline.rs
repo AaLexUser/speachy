@@ -123,6 +123,27 @@ struct Inner {
     state: Mutex<State>,
     idle: Condvar,
     next_session: AtomicU64,
+    /// Pipeline threads that are still running, including the ones of
+    /// stopped sessions that have not noticed yet.
+    threads: Mutex<usize>,
+    threads_done: Condvar,
+}
+
+/// Counts a pipeline thread as running for as long as it is alive.
+struct Running(Arc<Inner>);
+
+impl Running {
+    fn new(inner: &Arc<Inner>) -> Self {
+        *inner.threads.lock().unwrap() += 1;
+        Self(inner.clone())
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        *self.0.threads.lock().unwrap() -= 1;
+        self.0.threads_done.notify_all();
+    }
 }
 
 /// Speaks planned text. Cheap to clone; all clones control the same voice.
@@ -148,6 +169,8 @@ impl Speaker {
                 state: Mutex::new(State::Idle),
                 idle: Condvar::new(),
                 next_session: AtomicU64::new(1),
+                threads: Mutex::new(0),
+                threads_done: Condvar::new(),
             }),
         }
     }
@@ -188,10 +211,14 @@ impl Speaker {
             });
             inner.set_state(State::Preparing);
         }
+        let running = Running::new(inner);
         let inner = inner.clone();
         std::thread::Builder::new()
             .name("speachy-session".into())
-            .spawn(move || run_session(inner, id, plan, opts, cancel, tx, rx))
+            .spawn(move || {
+                let _running = running;
+                run_session(inner, id, plan, opts, cancel, tx, rx)
+            })
             .expect("spawn session thread");
         id
     }
@@ -259,6 +286,24 @@ impl Speaker {
         while *state != State::Idle {
             state = self.inner.idle.wait(state).unwrap();
         }
+    }
+
+    /// Stops speaking and waits, up to `timeout`, for every pipeline thread
+    /// to finish. Call this before the process exits: a model must not be
+    /// torn down while a thread is still synthesizing with it. Returns
+    /// whether all threads finished in time.
+    pub fn shutdown(&self, timeout: Duration) -> bool {
+        self.stop();
+        let deadline = Instant::now() + timeout;
+        let mut threads = self.inner.threads.lock().unwrap();
+        while *threads > 0 {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return false;
+            }
+            (threads, _) = self.inner.threads_done.wait_timeout(threads, left).unwrap();
+        }
+        true
     }
 }
 
@@ -401,9 +446,13 @@ fn run_session(
             tx.clone(),
         );
         let lookahead = opts.lookahead.as_secs_f32();
+        let running = Running::new(&inner);
         std::thread::Builder::new()
             .name("speachy-synth".into())
-            .spawn(move || synthesis_worker(engines, plan, speed, lookahead, gate, cancel, tx))
+            .spawn(move || {
+                let _running = running;
+                synthesis_worker(engines, plan, speed, lookahead, gate, cancel, tx)
+            })
             .expect("spawn synthesis thread");
     }
 

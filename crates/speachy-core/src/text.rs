@@ -10,6 +10,7 @@
 //! * chunks end on sentence boundaries whenever they can, on clause
 //!   boundaries when a sentence is too long, and never inside a word.
 
+use crate::lang::dominant_script;
 use serde::Serialize;
 
 /// What follows a chunk. Decides the pause inserted after it.
@@ -80,7 +81,16 @@ pub fn chunk(text: &str, opts: &ChunkOptions) -> Vec<Chunk> {
         let mut current = String::new();
         for sentence in sentences(paragraph) {
             let limit = next_limit(&chunks, opts);
-            if !current.is_empty() && weight(&current) + 1 + weight(sentence) <= limit {
+            // Sentences in different scripts are different languages, and a
+            // chunk is read in one language: keep them apart.
+            let same_script = match (dominant_script(&current), dominant_script(sentence)) {
+                (Some(a), Some(b)) => a == b,
+                _ => true,
+            };
+            if !current.is_empty()
+                && same_script
+                && weight(&current) + 1 + weight(sentence) <= limit
+            {
                 current.push(' ');
                 current.push_str(sentence);
                 continue;
@@ -558,6 +568,18 @@ mod tests {
                 "2, Visit rust-lang.org, then stop.",
                 "snake case name",
             ]
+        );
+    }
+
+    #[test]
+    fn a_change_of_script_starts_a_new_chunk() {
+        let chunks = chunk(
+            "Hello there. Привет! Как дела? 12345. Good.",
+            &opts(200, 200),
+        );
+        assert_eq!(
+            texts(&chunks),
+            ["Hello there.", "Привет! Как дела? 12345.", "Good."]
         );
     }
 

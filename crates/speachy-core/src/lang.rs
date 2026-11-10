@@ -13,7 +13,7 @@
 
 use whatlang::{Detector, Lang};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Detected {
     /// ISO 639-1 code.
     pub code: &'static str,
@@ -290,6 +290,55 @@ fn scripts(text: &str) -> Scripts {
     s
 }
 
+/// A writing system, as far as choosing a language is concerned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Script {
+    Latin,
+    Cyrillic,
+    /// Han, Kana and Hangul.
+    Cjk,
+    Arabic,
+    Devanagari,
+    Greek,
+}
+
+/// The writing system most of `text` is in; `None` if it has no letters.
+pub fn dominant_script(text: &str) -> Option<Script> {
+    let s = scripts(text);
+    // CJK characters carry more per character than letters do.
+    let cjk = (s.han + s.kana + s.hangul) * 2;
+    [
+        (cjk, Script::Cjk),
+        (s.latin, Script::Latin),
+        (s.cyrillic, Script::Cyrillic),
+        (s.arabic, Script::Arabic),
+        (s.devanagari, Script::Devanagari),
+        (s.greek, Script::Greek),
+    ]
+    .into_iter()
+    .filter(|(count, _)| *count > 0)
+    .max_by_key(|(count, _)| *count)
+    .map(|(_, script)| script)
+}
+
+/// The writing system of a language (ISO 639-1).
+pub fn script_of(lang: &str) -> Script {
+    match lang {
+        "ru" | "uk" | "bg" => Script::Cyrillic,
+        "zh" | "ja" | "ko" => Script::Cjk,
+        "ar" => Script::Arabic,
+        "hi" => Script::Devanagari,
+        "el" => Script::Greek,
+        _ => Script::Latin,
+    }
+}
+
+/// Whether `text` could be written in `lang`, going by its script. Text
+/// without letters fits any language.
+pub fn fits_language(text: &str, lang: &str) -> bool {
+    dominant_script(text).is_none_or(|script| script == script_of(lang))
+}
+
 /// Detects the language of `text`, answering only with one of `candidates`
 /// (ISO 639-1 codes of languages a voice exists for).
 pub fn detect(text: &str, candidates: &[String]) -> Option<Detected> {
@@ -547,5 +596,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(got.code, "en");
+    }
+
+    #[test]
+    fn scripts_are_told_apart() {
+        assert_eq!(dominant_script("Hello there"), Some(Script::Latin));
+        assert_eq!(dominant_script("Привет, мир"), Some(Script::Cyrillic));
+        assert_eq!(dominant_script("東京 is big"), Some(Script::Latin));
+        assert_eq!(dominant_script("東京タワーへ行く ok"), Some(Script::Cjk));
+        assert_eq!(dominant_script("123 — 456"), None);
+        assert!(fits_language("Hello", "de"));
+        assert!(!fits_language("Hello", "ru"));
+        assert!(fits_language("2024!", "ru"));
     }
 }

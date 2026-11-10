@@ -1,0 +1,19 @@
+[package]
+name = "speachy-cli"
+description = "Headless front end to the Speachy engine: models, voices, planning, speech, and a JSON command channel"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "speachy-cli"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+env_logger = "0.11"
+serde_json = "1"
+speachy-core = { path = "../speachy-core" }
+
+[dev-dependencies]
+tempfile = "3"

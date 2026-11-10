@@ -1,5 +1,9 @@
 //! Speachy: select text anywhere, press a shortcut, hear it read aloud by a
 //! local TTS model.
+//!
+//! This crate is the desktop shell: windows, the menu-bar icon, global
+//! shortcuts and reading the selection. Everything else is the engine in
+//! `speachy-core`, reached through a [`Session`].
 
 mod commands;
 mod selection;
@@ -10,74 +14,71 @@ mod tray;
 mod windows;
 
 use speachy_core::audio::SystemAudio;
-use speachy_core::engine::EngineCache;
-use speachy_core::models::ModelManager;
-use speachy_core::pipeline::{Outcome, Speaker, SpeechEvent, State};
-use speachy_core::settings::Settings;
+use speachy_core::pipeline::{SpeechEvent, State};
+use speachy_core::session::{Event, Paths, Session};
 use state::AppState;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, RunEvent, WindowEvent};
 
 /// Passed by the login item so the app starts in the menu bar only.
 const HIDDEN_FLAG: &str = "--hidden";
 
-fn on_speech_event(app: &AppHandle, event: &SpeechEvent) {
-    let _ = app.emit("speech", event);
+/// Forwards engine events to the windows and keeps the pill in step.
+///
+/// Called on engine threads, which may be holding engine state: anything
+/// that asks the engine a question runs on another thread.
+fn on_engine_event(app: &AppHandle, event: &Event) {
     match event {
-        SpeechEvent::Started { .. } => {
-            let show = app
-                .try_state::<AppState>()
-                .is_some_and(|s| s.settings.read().unwrap().show_overlay);
-            if show {
-                windows::show_overlay(app);
+        Event::Speech(speech) => {
+            let _ = app.emit("speech", speech);
+            match speech {
+                SpeechEvent::Started { .. } => {
+                    let app = app.clone();
+                    std::thread::spawn(move || {
+                        if app.state::<AppState>().session.settings().show_overlay {
+                            windows::show_overlay(&app);
+                        }
+                    });
+                }
+                SpeechEvent::State { state: State::Idle } => {
+                    let app = app.clone();
+                    std::thread::spawn(move || speech::hide_overlay_when_done(&app));
+                }
+                _ => {}
             }
         }
-        // The pipeline reports this while holding its own state, which the
-        // check reads: run it on another thread.
-        SpeechEvent::State { state: State::Idle } => {
-            let app = app.clone();
-            std::thread::spawn(move || speech::hide_overlay_when_done(&app));
+        Event::Download(download) => {
+            let _ = app.emit("download", download);
         }
-        SpeechEvent::Finished {
-            outcome: Outcome::Failed,
-            message,
-            ..
-        } => {
-            speech::notice(app, message.as_deref().unwrap_or("Speech failed"));
+        Event::Settings(settings) => {
+            let _ = app.emit("settings", settings);
         }
-        _ => {}
+        Event::Notice(message) => {
+            let (app, message) = (app.clone(), message.clone());
+            std::thread::spawn(move || speech::notice(&app, &message));
+        }
     }
 }
 
 fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let handle = app.handle().clone();
-    let data_dir = app.path().app_data_dir()?;
-    let settings_path = app.path().app_config_dir()?.join("settings.json");
-    let models_dir = data_dir.join("models");
-    std::fs::create_dir_all(&models_dir)?;
+    let paths = Paths::resolve();
+    std::fs::create_dir_all(&paths.models_dir)?;
 
-    let settings = Settings::load(&settings_path);
-    let engines = Arc::new(EngineCache::new(
-        models_dir.clone(),
-        settings.effective_threads(),
-        2,
-    ));
     let listener_handle = handle.clone();
-    let speaker = Speaker::new(engines.clone(), Arc::new(SystemAudio), move |event| {
-        on_speech_event(&listener_handle, event)
+    let session = Session::open(paths, Arc::new(SystemAudio), move |event| {
+        // Events can arrive before the state below is registered.
+        if listener_handle.try_state::<AppState>().is_some() {
+            on_engine_event(&listener_handle, event);
+        }
     });
-
+    let settings = session.settings();
     let hidden = settings.start_hidden || std::env::args().any(|arg| arg == HIDDEN_FLAG);
-    let shortcuts = settings.shortcuts.clone();
+
     app.manage(shortcuts::Bound::default());
     app.manage(AppState {
-        settings: RwLock::new(settings),
-        settings_path,
-        models: ModelManager::new(models_dir),
-        engines,
-        speaker,
-        downloads: Mutex::default(),
+        session: session.clone(),
         last_selection: Mutex::default(),
         notice_until: Mutex::default(),
     });
@@ -89,8 +90,8 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     if hidden {
         app.set_activation_policy(tauri::ActivationPolicy::Accessory);
     }
-    shortcuts::register_all(&handle, &shortcuts);
-    speech::preload(&handle);
+    shortcuts::register_all(&handle, &settings.shortcuts);
+    session.preload();
     Ok(())
 }
 
@@ -113,15 +114,9 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
-            commands::get_snapshot,
-            commands::install_model,
-            commands::cancel_install,
-            commands::remove_model,
-            commands::update_settings,
+            commands::engine,
+            commands::shell_info,
             commands::set_shortcuts_suspended,
-            commands::speak_text,
-            commands::stop,
-            commands::toggle_pause,
             commands::request_accessibility,
         ])
         .setup(setup)
@@ -143,10 +138,12 @@ pub fn run() {
             api, code: None, ..
         } => api.prevent_exit(),
         RunEvent::Exit => {
+            // A model must not be torn down under a thread that is still
+            // synthesizing with it.
             if let Some(state) = app.try_state::<AppState>() {
-                state.speaker.stop();
-                // Let the audio thread wind down before the process ends.
-                std::thread::sleep(Duration::from_millis(30));
+                if !state.session.shutdown(Duration::from_secs(10)) {
+                    log::warn!("the engine did not shut down in time");
+                }
             }
         }
         #[cfg(target_os = "macos")]

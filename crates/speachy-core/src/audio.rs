@@ -175,6 +175,8 @@ pub struct CaptureAudio {
     pub time_scale: f32,
     /// Everything played so far, in order, with its sample rate.
     pub played: Arc<Mutex<Vec<Audio>>>,
+    /// Whether played audio is kept in `played`.
+    pub keep: bool,
 }
 
 impl CaptureAudio {
@@ -182,6 +184,16 @@ impl CaptureAudio {
         Self {
             time_scale,
             played: Arc::default(),
+            keep: true,
+        }
+    }
+
+    /// A sound card that plays at `time_scale` and remembers nothing: for
+    /// long-running headless sessions.
+    pub fn discarding(time_scale: f32) -> Self {
+        Self {
+            keep: false,
+            ..Self::new(time_scale)
         }
     }
 
@@ -212,6 +224,7 @@ impl AudioBackend for CaptureAudio {
         let (paused_flag, stop_flag) = (paused.clone(), stop.clone());
         let played = self.played.clone();
         let time_scale = self.time_scale;
+        let keep = self.keep;
         // Stand-in for the device callback thread.
         std::thread::spawn(move || {
             // When the audio consumed so far has "finished playing". Sleeping
@@ -248,10 +261,12 @@ impl AudioBackend for CaptureAudio {
                 }
                 // Record before reporting the end, so a listener that reacts
                 // to `Finished` already sees the audio.
-                played.lock().unwrap().push(Audio {
-                    samples,
-                    sample_rate,
-                });
+                if keep {
+                    played.lock().unwrap().push(Audio {
+                        samples,
+                        sample_rate,
+                    });
+                }
                 source.finish();
             }
         });
