@@ -251,8 +251,8 @@ fn plays_every_chunk_in_order_with_only_the_intended_pauses() {
 
 #[test]
 fn synthesis_runs_ahead_of_playback_but_stops_at_the_lookahead() {
-    // 2 s chunks played at 20x: one chunk per 100 ms. Synthesis is instant.
-    let rig = rig(2.0, 0, 20.0);
+    // 2 s chunks played at 10x: one chunk per 200 ms. Synthesis is instant.
+    let rig = rig(2.0, 0, 10.0);
     let session = rig.speaker.speak(plan("chunk", 12), opts(5.0));
     let events = rig.until_finished(session);
     assert_eq!(outcome(&events, session), Some((Outcome::Completed, None)));
@@ -285,8 +285,8 @@ fn synthesis_runs_ahead_of_playback_but_stops_at_the_lookahead() {
 #[test]
 fn slow_synthesis_is_reported_as_preparing_between_chunks() {
     // 0.2 s chunks at 4x take about 120 ms to play (with the pause after
-    // them) but 300 ms to synthesize.
-    let rig = rig(0.2, 300, 4.0);
+    // them) but 500 ms to synthesize.
+    let rig = rig(0.2, 500, 4.0);
     let session = rig.speaker.speak(plan("chunk", 3), opts(5.0));
     let events = rig.until_finished(session);
     assert_eq!(outcome(&events, session), Some((Outcome::Completed, None)));

@@ -199,21 +199,15 @@ pub struct SettingsUpdate {
     shortcut_errors: Vec<String>,
 }
 
-/// Applies a partial update: `patch` holds only the fields that changed.
-#[tauri::command]
-pub fn update_settings(
-    app: AppHandle,
-    state: State<AppState>,
-    patch: serde_json::Value,
-) -> Result<SettingsUpdate, String> {
+/// Returns `old` with the fields of `patch` replaced. `shortcuts` merges
+/// field by field; every other field is replaced whole.
+fn merge_settings(old: &Settings, patch: serde_json::Value) -> Result<Settings, String> {
     let serde_json::Value::Object(patch) = patch else {
         return Err("settings update must be an object".into());
     };
-    let old = state.settings.read().unwrap().clone();
-    let mut merged = serde_json::to_value(&old).map_err(|err| err.to_string())?;
+    let mut merged = serde_json::to_value(old).map_err(|err| err.to_string())?;
     for (key, value) in patch {
         match (merged.get_mut(&key), value) {
-            // Nested objects (shortcuts) merge field by field.
             (Some(serde_json::Value::Object(target)), serde_json::Value::Object(fields))
                 if key == "shortcuts" =>
             {
@@ -226,6 +220,18 @@ pub fn update_settings(
     let mut new: Settings =
         serde_json::from_value(merged).map_err(|err| format!("invalid settings: {err}"))?;
     new.sanitize();
+    Ok(new)
+}
+
+/// Applies a partial update: `patch` holds only the fields that changed.
+#[tauri::command]
+pub fn update_settings(
+    app: AppHandle,
+    state: State<AppState>,
+    patch: serde_json::Value,
+) -> Result<SettingsUpdate, String> {
+    let old = state.settings.read().unwrap().clone();
+    let new = merge_settings(&old, patch)?;
     for keys in [
         &new.shortcuts.speak_selection,
         &new.shortcuts.pause_resume,
@@ -311,4 +317,50 @@ pub fn request_accessibility(app: AppHandle) -> bool {
         }
     }
     granted
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn merges_only_the_given_fields() {
+        let old = Settings::default();
+        let new = merge_settings(
+            &old,
+            json!({
+                "speed": 1.5,
+                "default_voice": { "model_id": "supertonic-3", "voice_id": "M2" },
+                "shortcuts": { "stop": "F9" },
+            }),
+        )
+        .unwrap();
+        assert_eq!(new.speed, 1.5);
+        assert_eq!(new.default_voice.as_ref().unwrap().voice_id, "M2");
+        // Shortcuts not mentioned keep their value.
+        assert_eq!(new.shortcuts.stop, "F9");
+        assert_eq!(new.shortcuts.speak_selection, old.shortcuts.speak_selection);
+        assert_eq!(new.volume, old.volume);
+
+        let cleared = merge_settings(&new, json!({ "default_voice": null })).unwrap();
+        assert_eq!(cleared.default_voice, None);
+        assert_eq!(cleared.speed, 1.5);
+    }
+
+    #[test]
+    fn rejects_bad_updates_and_clamps_values() {
+        let old = Settings::default();
+        assert!(merge_settings(&old, json!({ "no_such_setting": 1 })).is_err());
+        assert!(merge_settings(&old, json!({ "speed": "fast" })).is_err());
+        assert!(merge_settings(&old, json!([1, 2])).is_err());
+        assert_eq!(
+            merge_settings(&old, json!({ "speed": 99 })).unwrap().speed,
+            2.5
+        );
+        assert_eq!(
+            merge_settings(&old, json!({ "language_voices": {} })).unwrap(),
+            old
+        );
+    }
 }

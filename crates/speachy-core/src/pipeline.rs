@@ -503,9 +503,6 @@ fn run_session(
                 stream.push(index, audio, pause);
             }
             Msg::Play(PlayEvent::Started(index)) => {
-                if let Some(secs) = waiting.remove(&index) {
-                    gate.add(-secs);
-                }
                 playing = true;
                 ever_played = true;
                 inner.if_current(id, |inner| {
@@ -514,6 +511,11 @@ fn run_session(
                         inner.set_state(State::Speaking);
                     }
                 });
+                // Only now may the worker synthesize further ahead: progress
+                // is reported before the work it unlocks begins.
+                if let Some(secs) = waiting.remove(&index) {
+                    gate.add(-secs);
+                }
             }
             Msg::Play(PlayEvent::Finished(_)) => {
                 done += 1;

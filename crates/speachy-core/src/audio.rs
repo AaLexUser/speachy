@@ -4,7 +4,7 @@ use crate::engine::Audio;
 use anyhow::{Context, Result};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Playback progress of a queued chunk, reported from the audio thread.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -214,6 +214,10 @@ impl AudioBackend for CaptureAudio {
         let time_scale = self.time_scale;
         // Stand-in for the device callback thread.
         std::thread::spawn(move || {
+            // When the audio consumed so far has "finished playing". Sleeping
+            // until this absolute time, rather than for each block's length,
+            // keeps the clock from drifting with every sleep's overshoot.
+            let mut played_until = Instant::now();
             for mut source in incoming {
                 let sample_rate = source.sample_rate;
                 let mut samples = Vec::with_capacity(source.size_hint().0);
@@ -231,8 +235,12 @@ impl AudioBackend for CaptureAudio {
                     samples.extend(source.by_ref().take(block));
                     let got = samples.len() - before;
                     if time_scale.is_finite() && got > 0 {
-                        let nanos = got as f64 / sample_rate as f64 * 1e9 / time_scale as f64;
-                        std::thread::sleep(Duration::from_nanos(nanos as u64));
+                        let secs = got as f64 / sample_rate as f64 / time_scale as f64;
+                        // After a pause or an empty queue the clock restarts
+                        // from now; it never tries to catch up.
+                        played_until =
+                            played_until.max(Instant::now()) + Duration::from_secs_f64(secs);
+                        std::thread::sleep(played_until.saturating_duration_since(Instant::now()));
                     }
                     if got < block {
                         break;
