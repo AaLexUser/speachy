@@ -5,11 +5,12 @@ use crate::state::AppState;
 use speachy_core::pipeline::SpeakOptions;
 use speachy_core::plan::{self, PlanError};
 use speachy_core::settings::VoiceRef;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
 /// A short message for the user, shown by the pill and the settings window.
 pub fn notice(app: &AppHandle, message: &str) {
+    const SHOWN_FOR: Duration = Duration::from_millis(2500);
     log::info!("notice: {message}");
     let _ = app.emit("notice", message);
     let state = app.state::<AppState>();
@@ -17,14 +18,27 @@ pub fn notice(app: &AppHandle, message: &str) {
         return;
     }
     // Surface the message on the pill for a moment, even when idle.
+    *state.notice_until.lock().unwrap() = Some(Instant::now() + SHOWN_FOR);
     crate::windows::show_overlay(app);
     let app = app.clone();
     std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(2500));
-        if !app.state::<AppState>().speaker.is_active() {
-            crate::windows::hide_overlay(&app);
-        }
+        std::thread::sleep(SHOWN_FOR);
+        hide_overlay_when_done(&app);
     });
+}
+
+/// Hides the pill unless something is being spoken or a notice is still
+/// meant to be on screen.
+pub fn hide_overlay_when_done(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let notice_showing = state
+        .notice_until
+        .lock()
+        .unwrap()
+        .is_some_and(|until| Instant::now() < until);
+    if !notice_showing && state.speaker.state() == speachy_core::pipeline::State::Idle {
+        crate::windows::hide_overlay(app);
+    }
 }
 
 /// Speaks `text`. With `voice`, that exact voice is used (for previews);

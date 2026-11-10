@@ -35,7 +35,7 @@ mod platform {
     use accessibility_sys::{
         kAXErrorSuccess, kAXFocusedUIElementAttribute, kAXSelectedTextAttribute,
         kAXTrustedCheckOptionPrompt, AXIsProcessTrustedWithOptions, AXUIElementCopyAttributeValue,
-        AXUIElementCreateSystemWide, AXUIElementRef,
+        AXUIElementCreateSystemWide, AXUIElementRef, AXUIElementSetMessagingTimeout,
     };
     use core_foundation::base::{CFGetTypeID, CFRelease, CFTypeRef, TCFType};
     use core_foundation::boolean::CFBoolean;
@@ -90,6 +90,8 @@ mod platform {
             if system.is_null() {
                 return None;
             }
+            // An unresponsive app must not hold the shortcut up for long.
+            AXUIElementSetMessagingTimeout(system, 0.6);
             let mut focused: CFTypeRef = ptr::null();
             let attribute = CFString::from_static_string(kAXFocusedUIElementAttribute);
             let status = AXUIElementCopyAttributeValue(

@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::Instant;
 
 pub struct Download {
     pub cancel: Arc<AtomicBool>,
@@ -25,4 +26,6 @@ pub struct AppState {
     /// The selection most recently sent to the speaker by the shortcut, to
     /// tell "speak this new selection" from "stop".
     pub last_selection: Mutex<String>,
+    /// While a notice is on the pill, the time until which it stays up.
+    pub notice_until: Mutex<Option<Instant>>,
 }

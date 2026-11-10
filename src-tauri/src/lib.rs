@@ -33,7 +33,12 @@ fn on_speech_event(app: &AppHandle, event: &SpeechEvent) {
                 windows::show_overlay(app);
             }
         }
-        SpeechEvent::State { state: State::Idle } => windows::hide_overlay(app),
+        // The pipeline reports this while holding its own state, which the
+        // check reads: run it on another thread.
+        SpeechEvent::State { state: State::Idle } => {
+            let app = app.clone();
+            std::thread::spawn(move || speech::hide_overlay_when_done(&app));
+        }
         SpeechEvent::Finished {
             outcome: Outcome::Failed,
             message,
@@ -74,6 +79,7 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         speaker,
         downloads: Mutex::default(),
         last_selection: Mutex::default(),
+        notice_until: Mutex::default(),
     });
 
     tray::create(&handle)?;
