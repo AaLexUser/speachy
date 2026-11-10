@@ -45,6 +45,10 @@ fn main() -> Result<()> {
                 settings.auto_detect_language = false;
             }
             "--realtime" => realtime = true,
+            "--catalog-json" => {
+                println!("{}", serde_json::to_string_pretty(catalog::catalog())?);
+                return Ok(());
+            }
             "--list" => {
                 for m in catalog::catalog() {
                     println!("{:<20} {:>4} MB  {}  [{}]", m.id, m.size_bytes / 1_000_000, m.name, m.languages.join(","));

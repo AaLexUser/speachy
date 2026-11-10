@@ -12,16 +12,35 @@ use tauri::{AppHandle, Emitter, Manager};
 pub fn notice(app: &AppHandle, message: &str) {
     log::info!("notice: {message}");
     let _ = app.emit("notice", message);
+    let state = app.state::<AppState>();
+    if !state.settings.read().unwrap().show_overlay {
+        return;
+    }
+    // Surface the message on the pill for a moment, even when idle.
+    crate::windows::show_overlay(app);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(2500));
+        if !app.state::<AppState>().speaker.is_active() {
+            crate::windows::hide_overlay(&app);
+        }
+    });
 }
 
 /// Speaks `text`. With `voice`, that exact voice is used (for previews);
 /// otherwise voices follow the user's settings and the detected language.
-pub fn speak(app: &AppHandle, text: &str, voice: Option<VoiceRef>) -> Result<(), String> {
+///
+/// With `lang`, the text is read in that language instead of detecting it.
+pub fn speak(app: &AppHandle, text: &str, voice: Option<VoiceRef>, lang: Option<String>) -> Result<(), String> {
     let state = app.state::<AppState>();
     let mut settings = state.settings.read().unwrap().clone();
     if let Some(voice) = voice {
         settings.language_voices.clear();
         settings.default_voice = Some(voice);
+    }
+    if let Some(lang) = lang {
+        settings.auto_detect_language = false;
+        settings.language = lang;
     }
     let installed = state.models.installed();
     let chunks = plan::plan(text, &settings, &installed).map_err(|err| {
@@ -57,7 +76,7 @@ pub fn speak_selection(app: &AppHandle) {
         Some(text) => {
             *last = text.clone();
             drop(last);
-            if let Err(message) = speak(app, &text, None) {
+            if let Err(message) = speak(app, &text, None, None) {
                 notice(app, &message);
             }
         }
@@ -79,7 +98,7 @@ pub fn speak_selection(app: &AppHandle) {
 pub fn speak_clipboard(app: &AppHandle) {
     match selection::clipboard_text() {
         Some(text) => {
-            if let Err(message) = speak(app, &text, None) {
+            if let Err(message) = speak(app, &text, None, None) {
                 notice(app, &message);
             }
         }

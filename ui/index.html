@@ -1,1 +1,53 @@
-<!doctype html><title>Speachy</title>
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Speachy</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="titlebar" data-tauri-drag-region></div>
+    <div class="app">
+      <aside class="sidebar">
+        <div class="brand" data-tauri-drag-region>
+          <svg class="logo" viewBox="0 0 40 40" aria-hidden="true">
+            <rect width="40" height="40" rx="9.5" fill="#1b1e25" />
+            <g fill="none" stroke-linecap="round" stroke-width="3.4">
+              <path d="M9.5 17v6" stroke="#ffbe50" />
+              <path d="M14.75 13v14" stroke="#ffab53" />
+              <path d="M20 9.5v21" stroke="#ff9756" />
+              <path d="M25.25 14.8v10.4" stroke="#ff8457" />
+              <path d="M30.5 17.6v4.8" stroke="#ff7056" />
+            </g>
+          </svg>
+          <span>Speachy</span>
+        </div>
+        <nav id="nav">
+          <button data-page="home" class="active">
+            <svg viewBox="0 0 20 20"><path d="M3 9.2 10 3l7 6.2V17h-4.6v-4.6H7.6V17H3z" /></svg>Home
+          </button>
+          <button data-page="models">
+            <svg viewBox="0 0 20 20"><path d="M10 2.5 17 6v8l-7 3.5L3 14V6zm0 0v7.5m0 0L3 6m7 4 7-4m-7 4v7.5" /></svg>Models
+          </button>
+          <button data-page="voices">
+            <svg viewBox="0 0 20 20"><path d="M10 2.8a2.6 2.6 0 0 1 2.6 2.6v4.2a2.6 2.6 0 0 1-5.2 0V5.4A2.6 2.6 0 0 1 10 2.8zM4.8 9.4a5.2 5.2 0 0 0 10.4 0M10 14.6v2.6" /></svg>Voices
+          </button>
+          <button data-page="settings">
+            <svg viewBox="0 0 20 20"><path d="M3 6h6m4 0h4M3 14h3m4 0h7M11 4v4M8 12v4" /></svg>Settings
+          </button>
+        </nav>
+        <div class="sidebar-foot">
+          <div id="status" class="status" data-state="idle">
+            <span class="dot"></span><span id="status-text">Ready</span>
+          </div>
+          <div class="version" id="version"></div>
+        </div>
+      </aside>
+      <main id="main"></main>
+    </div>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="samples.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

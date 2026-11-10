@@ -221,8 +221,8 @@ pub fn set_shortcuts_suspended(app: AppHandle, state: State<AppState>, suspended
 }
 
 #[tauri::command]
-pub fn speak_text(app: AppHandle, text: String, voice: Option<VoiceRef>) -> Result<(), String> {
-    speech::speak(&app, &text, voice)
+pub fn speak_text(app: AppHandle, text: String, voice: Option<VoiceRef>, lang: Option<String>) -> Result<(), String> {
+    speech::speak(&app, &text, voice, lang)
 }
 
 #[tauri::command]
