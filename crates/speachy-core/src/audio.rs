@@ -134,13 +134,22 @@ impl AudioBackend for SystemAudio {
             .context("could not open the default audio output device")?;
         device.log_on_drop(false);
         let player = rodio::Player::connect_new(device.mixer());
-        Ok(Box::new(SystemStream { player, _device: device, on_event }))
+        Ok(Box::new(SystemStream {
+            player,
+            _device: device,
+            on_event,
+        }))
     }
 }
 
 impl AudioStream for SystemStream {
     fn push(&mut self, index: usize, audio: Audio, pause_after: Duration) {
-        self.player.append(ChunkSource::new(index, audio, pause_after, self.on_event.clone()));
+        self.player.append(ChunkSource::new(
+            index,
+            audio,
+            pause_after,
+            self.on_event.clone(),
+        ));
     }
 
     fn set_paused(&mut self, paused: bool) {
@@ -170,7 +179,10 @@ pub struct CaptureAudio {
 
 impl CaptureAudio {
     pub fn new(time_scale: f32) -> Self {
-        Self { time_scale, played: Arc::default() }
+        Self {
+            time_scale,
+            played: Arc::default(),
+        }
     }
 
     /// All captured audio joined together. Chunks are expected to share a
@@ -228,11 +240,19 @@ impl AudioBackend for CaptureAudio {
                 }
                 // Record before reporting the end, so a listener that reacts
                 // to `Finished` already sees the audio.
-                played.lock().unwrap().push(Audio { samples, sample_rate });
+                played.lock().unwrap().push(Audio {
+                    samples,
+                    sample_rate,
+                });
                 source.finish();
             }
         });
-        Ok(Box::new(CaptureStream { queue, paused, stop, on_event }))
+        Ok(Box::new(CaptureStream {
+            queue,
+            paused,
+            stop,
+            on_event,
+        }))
     }
 }
 

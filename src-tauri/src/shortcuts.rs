@@ -27,8 +27,16 @@ pub fn register_all(app: &AppHandle, shortcuts: &Shortcuts) -> Vec<String> {
     let mut bound = Vec::new();
     let mut errors = Vec::new();
     let wanted = [
-        (&shortcuts.speak_selection, Action::SpeakSelection, "Speak selection"),
-        (&shortcuts.pause_resume, Action::PauseResume, "Pause / resume"),
+        (
+            &shortcuts.speak_selection,
+            Action::SpeakSelection,
+            "Speak selection",
+        ),
+        (
+            &shortcuts.pause_resume,
+            Action::PauseResume,
+            "Pause / resume",
+        ),
         (&shortcuts.stop, Action::Stop, "Stop"),
     ];
     for (keys, action, label) in wanted {
@@ -38,7 +46,9 @@ pub fn register_all(app: &AppHandle, shortcuts: &Shortcuts) -> Vec<String> {
         let shortcut = match Shortcut::from_str(keys) {
             Ok(shortcut) => shortcut,
             Err(err) => {
-                errors.push(format!("{label}: \"{keys}\" is not a valid shortcut ({err})"));
+                errors.push(format!(
+                    "{label}: \"{keys}\" is not a valid shortcut ({err})"
+                ));
                 continue;
             }
         };
@@ -63,14 +73,23 @@ pub fn validate(keys: &str) -> Result<(), String> {
     if keys.trim().is_empty() {
         return Ok(());
     }
-    Shortcut::from_str(keys).map(|_| ()).map_err(|err| format!("\"{keys}\" is not a valid shortcut ({err})"))
+    Shortcut::from_str(keys)
+        .map(|_| ())
+        .map_err(|err| format!("\"{keys}\" is not a valid shortcut ({err})"))
 }
 
 pub fn handle(app: &AppHandle, shortcut: &Shortcut, event: ShortcutEvent) {
     if event.state() != ShortcutState::Pressed {
         return;
     }
-    let action = app.state::<Bound>().0.lock().unwrap().iter().find(|(s, _)| s == shortcut).map(|(_, a)| *a);
+    let action = app
+        .state::<Bound>()
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(s, _)| s == shortcut)
+        .map(|(_, a)| *a);
     let Some(action) = action else { return };
     let app = app.clone();
     // Reading the selection can take a few hundred milliseconds: keep it

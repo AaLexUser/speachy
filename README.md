@@ -1,0 +1,195 @@
+# Speachy
+
+Select text in any app, press a shortcut, and hear it read aloud — by a
+text-to-speech model that runs entirely on your computer.
+
+Speachy is the mirror image of dictation tools such as Wispr Flow or
+[Handy](https://github.com/cjpais/Handy): they turn speech into text, Speachy
+turns text into speech. It lives in the menu bar, and a small pill at the
+bottom of the screen shows what is being read.
+
+![The Home tab while reading: the sentence being spoken is highlighted](docs/home.png)
+
+## What it does
+
+- **Speak the selection.** Press <kbd>⌃</kbd><kbd>⌥</kbd><kbd>S</kbd> with
+  text selected anywhere. Press it again to stop, or select something else and
+  press it to switch. <kbd>⌃</kbd><kbd>⌥</kbd><kbd>P</kbd> pauses and resumes,
+  <kbd>⌃</kbd><kbd>⌥</kbd><kbd>X</kbd> stops. All three can be changed.
+- **Starts quickly, never waits.** Text is split into chunks. The first one is
+  short, so speech starts as soon as it is synthesized; the following ones are
+  synthesized ahead of playback and queued back to back, so there are no gaps
+  between them. See [How the pipeline works](#how-the-pipeline-works).
+- **Choose and download models.** The Models tab lists the supported models
+  with their size and languages; downloads resume if interrupted.
+- **Choose voices.** Pick a default voice and, if you like, a different voice
+  for specific languages. Every voice has a preview button.
+- **Detects the language.** Each part of the text is read in its own language
+  with a voice that can speak it. Mixed-language text works.
+- **Private.** Nothing you read leaves the machine. The network is used only
+  to download models.
+
+| Models | Voices |
+| --- | --- |
+| ![Models tab](docs/models.png) | ![Voices tab](docs/voices.png) |
+
+## Models
+
+| Model | Download | Languages | Voices | Notes |
+| --- | --- | --- | --- | --- |
+| **Supertonic 3** (recommended) | 129 MB | 31 | 10 | Fast, 44.1 kHz. The one to use with language detection. |
+| Kokoro 82M v1.0 | 350 MB | English (US, British), Chinese | 36 | Expressive voices; needs a faster machine to stay ahead of playback. |
+| Kokoro 82M v1.0 (compact) | 132 MB | same | 36 | 8-bit quantized: smaller download, somewhat slower. |
+| KittenTTS Nano 0.2 | 33 MB | English | 8 | Tiny and fast; skips words missing from its dictionary. |
+| KittenTTS Mini 0.1 | 163 MB | English | 8 | Larger KittenTTS model, same limitation. |
+
+All of them run through [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)
+on the CPU. Model weights are downloaded from the sherpa-onnx `tts-models`
+release into the app's data directory and carry their own licences
+(Supertonic: OpenRAIL-M; Kokoro and KittenTTS: Apache-2.0).
+
+## Install
+
+There is no signed release yet. Either download the `Speachy-macos-arm64`
+disk image from the latest run of the **Build** workflow on GitHub, or build
+it yourself:
+
+```sh
+# Prerequisites: Rust (https://rustup.rs) and the Xcode command line tools.
+cargo install tauri-cli --version "^2" --locked
+
+cargo tauri dev      # run from source
+cargo tauri build    # produce target/release/bundle/macos/Speachy.app and a .dmg
+```
+
+The first build downloads the prebuilt sherpa-onnx library for your platform.
+There is no JavaScript toolchain: the interface in `ui/` is plain HTML, CSS
+and JavaScript.
+
+First run:
+
+1. Open the **Models** tab and download a model (Supertonic 3 is a good
+   start).
+2. On macOS, grant **Accessibility** access when asked (System Settings →
+   Privacy & Security → Accessibility). Speachy needs it to read the text
+   selected in other apps.
+3. Select some text anywhere and press <kbd>⌃</kbd><kbd>⌥</kbd><kbd>S</kbd>.
+
+Closing the window keeps Speachy running in the menu bar; quit from the menu
+bar icon. *Launch at login* and *Start in the menu bar* are in Settings.
+
+> An app you build yourself is ad-hoc signed, and macOS ties the Accessibility
+> permission to the signature. After rebuilding you may have to remove and
+> re-add Speachy in the Accessibility list.
+
+## How the pipeline works
+
+```
+selection ──► clean up ──► chunks ──► language + voice per chunk
+                                              │
+                    ┌─────────────────────────┘
+                    ▼
+        synthesis worker ──► gapless audio queue ──► speakers
+        (runs ahead of         (chunk, pause, chunk, …)
+         playback)
+```
+
+1. **Reading the selection** (`src-tauri/src/selection.rs`). On macOS the
+   Accessibility API is asked for the focused element's selected text. Apps
+   that do not expose it (many browsers and Electron apps) get a simulated
+   <kbd>⌘</kbd><kbd>C</kbd> instead, after which the previous clipboard
+   contents are put back.
+2. **Chunking** (`crates/speachy-core/src/text.rs`). Markdown markup, URLs and
+   hard line wraps are cleaned up, then the text is cut at sentence
+   boundaries (and at clause boundaries inside very long sentences, never
+   inside a word). The first chunk is at most ~110 characters. Each later
+   chunk may be as long as everything before it combined, up to 280
+   characters: as long as synthesis is at least twice as fast as playback, a
+   chunk is always ready before it is needed.
+3. **Language and voice** (`lang.rs`, `plan.rs`). The language of the whole
+   text and of each sufficiently long chunk is detected from its script,
+   common words and letter statistics. Each chunk then gets a voice: your
+   choice for that language, else the default voice if it speaks the
+   language, else any installed model that does.
+4. **Synthesis ahead of playback** (`pipeline.rs`). A worker synthesizes the
+   chunks in order and keeps going until a configurable amount of audio
+   (20 s by default) is waiting, then idles until playback catches up — so
+   stopping early wastes little work. The model is loaded once and kept warm;
+   by default it is preloaded at launch.
+5. **Gapless playback** (`audio.rs`). Finished chunks are appended to one
+   audio queue and play back to back. Silence at the edges of each chunk is
+   trimmed and replaced by a deliberate pause that depends on the boundary
+   (clause, sentence, paragraph), so the rhythm does not depend on where the
+   text happened to be cut.
+
+For English with Kokoro, words are converted to phonemes by
+[misaki-rs](https://github.com/MicheleYin/misaki-rs), the Rust port of the
+phonemizer Kokoro was trained with (`english.rs`); words it does not know are
+sounded out by spelling rules rather than skipped.
+
+## Repository layout
+
+```
+crates/speachy-core/   Engine, model manager and pipeline; no GUI dependencies
+  src/catalog.rs         downloadable models and their voices
+  src/models.rs          download (resumable), unpack, remove
+  src/text.rs            cleaning and chunking
+  src/lang.rs            language detection
+  src/plan.rs            voice selection per chunk
+  src/engine.rs          sherpa-onnx synthesis, loaded-model cache
+  src/pipeline.rs        synthesize-ahead pipeline, pause / stop
+  src/audio.rs           gapless output queue
+  examples/speak.rs      command-line front end
+  tests/pipeline.rs      pipeline behaviour with a fake engine and sound card
+src-tauri/             The desktop app (Tauri 2): tray, shortcuts, selection,
+                       windows, commands
+ui/                    Settings window and overlay pill
+scripts/make_icons.py  Regenerates the icons
+```
+
+## Command line
+
+The pipeline can be used without the app, which is handy for trying models
+and measuring timing:
+
+```sh
+cd crates/speachy-core
+cargo run --release --example speak -- --list
+cargo run --release --example speak -- --install supertonic-3
+cargo run --release --example speak -- "Hello from Speachy."
+cargo run --release --example speak -- --voice M2 --out hello.wav "Hello."
+```
+
+Models go to `./models` unless `--models DIR` or `SPEACHY_MODELS` says
+otherwise.
+
+## Development
+
+```sh
+cargo test --workspace     # unit tests and pipeline tests
+cargo clippy --workspace --all-targets
+```
+
+The app also builds and runs on Linux (X11), where the shortcut reads the
+primary selection. Building there needs the Tauri prerequisites plus
+`libasound2-dev`, `libssl-dev` and `libxdo-dev`. Windows is untested.
+
+## Status and known limitations
+
+This is a first version. The core (chunking, language detection, downloads,
+the pipeline) is covered by tests, and the whole app has been run end to end
+on Linux. The macOS-specific code — reading the selection through the
+Accessibility API and the clipboard, the menu-bar icon, the overlay pill —
+compiles for macOS but **has not yet been exercised on a Mac**; expect to
+find rough edges there first.
+
+- Kokoro needs a reasonably fast CPU. If synthesis is slower than playback
+  you will hear pauses between chunks (the pill shows *Preparing…*).
+- KittenTTS skips words that are not in its dictionary.
+- Piper voices are not included: sherpa-onnx 2.0 no longer bundles the
+  phonemizer they need.
+- Language detection on a handful of words is unreliable by nature; short
+  selections fall back to the language set under Voices → Language.
+- The simulated <kbd>⌘</kbd><kbd>C</kbd> uses the physical key position of
+  "C" on a QWERTY layout.
+- The overlay pill appears on the main display.

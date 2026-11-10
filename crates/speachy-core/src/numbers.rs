@@ -1,13 +1,33 @@
 //! Spells numbers and a few symbols out as English words.
 //!
-//! Lexicon-driven models (Kokoro, KittenTTS) can only pronounce words found
-//! in their dictionary; digits and symbols would be skipped silently.
+//! KittenTTS pronounces words by looking them up in a lexicon; digits and
+//! symbols are not in it and would be skipped silently.
 
 const ONES: [&str; 20] = [
-    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven",
-    "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen",
+    "zero",
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+    "ten",
+    "eleven",
+    "twelve",
+    "thirteen",
+    "fourteen",
+    "fifteen",
+    "sixteen",
+    "seventeen",
+    "eighteen",
+    "nineteen",
 ];
-const TENS: [&str; 10] = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"];
+const TENS: [&str; 10] = [
+    "", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety",
+];
 const SCALES: [&str; 5] = ["", "thousand", "million", "billion", "trillion"];
 
 fn below_thousand(n: u64, out: &mut Vec<&'static str>) {
@@ -53,7 +73,9 @@ pub fn cardinal(n: u64) -> String {
 /// `21` → "twenty first".
 pub fn ordinal(n: u64) -> String {
     let words = cardinal(n);
-    let (head, last) = words.rsplit_once(' ').map_or(("", words.as_str()), |(h, l)| (h, l));
+    let (head, last) = words
+        .rsplit_once(' ')
+        .map_or(("", words.as_str()), |(h, l)| (h, l));
     let last = match last {
         "one" => "first".to_string(),
         "two" => "second".to_string(),
@@ -73,7 +95,10 @@ pub fn ordinal(n: u64) -> String {
 }
 
 fn digits(s: &str) -> String {
-    s.bytes().map(|b| ONES[(b - b'0') as usize]).collect::<Vec<_>>().join(" ")
+    s.bytes()
+        .map(|b| ONES[(b - b'0') as usize])
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Reads a four-digit year the way people say it: 1999 → "nineteen ninety nine".
@@ -150,7 +175,11 @@ pub fn spell_out_english(text: &str) -> String {
 
 /// Makes sure a word about to be appended is separated from what precedes it.
 fn pad(out: &mut String) {
-    if out.chars().next_back().is_some_and(|p| !p.is_whitespace() && !matches!(p, '(' | '[' | '"' | '-')) {
+    if out
+        .chars()
+        .next_back()
+        .is_some_and(|p| !p.is_whitespace() && !matches!(p, '(' | '[' | '"' | '-'))
+    {
         out.push(' ');
     }
 }
@@ -163,7 +192,12 @@ struct Number {
 /// Reads a number at the start of `chars`. Returns its words and how many
 /// characters it spans.
 fn read_number(chars: &[char]) -> (Number, usize) {
-    let digit_run = |from: usize| chars[from..].iter().take_while(|c| c.is_ascii_digit()).count();
+    let digit_run = |from: usize| {
+        chars[from..]
+            .iter()
+            .take_while(|c| c.is_ascii_digit())
+            .count()
+    };
     let mut len = digit_run(0);
     let mut integer: String = chars[..len].iter().collect();
     let mut grouped = false;
@@ -177,7 +211,11 @@ fn read_number(chars: &[char]) -> (Number, usize) {
             break;
         }
     }
-    let value: Option<u64> = if integer.len() <= 15 { integer.parse().ok() } else { None };
+    let value: Option<u64> = if integer.len() <= 15 {
+        integer.parse().ok()
+    } else {
+        None
+    };
 
     // Decimal part: "3.14" (but not the period that ends a sentence). A
     // dotted run such as the version "2.0.1" is read part by part.
@@ -190,16 +228,38 @@ fn read_number(chars: &[char]) -> (Number, usize) {
             words.push_str(&digits(&part));
             len += 1 + part_len;
         }
-        return (Number { words, is_one: false }, len);
+        return (
+            Number {
+                words,
+                is_one: false,
+            },
+            len,
+        );
     }
     let Some(value) = value else {
-        return (Number { words: digits(&integer), is_one: false }, len);
+        return (
+            Number {
+                words: digits(&integer),
+                is_one: false,
+            },
+            len,
+        );
     };
     // Ordinals: "1st", "22nd", "3rd", "4th".
-    let suffix: String = chars[len..].iter().take(2).collect::<String>().to_lowercase();
+    let suffix: String = chars[len..]
+        .iter()
+        .take(2)
+        .collect::<String>()
+        .to_lowercase();
     let after_suffix = chars.get(len + 2).is_some_and(|c| c.is_alphanumeric());
     if matches!(suffix.as_str(), "st" | "nd" | "rd" | "th") && !after_suffix {
-        return (Number { words: ordinal(value), is_one: false }, len + 2);
+        return (
+            Number {
+                words: ordinal(value),
+                is_one: false,
+            },
+            len + 2,
+        );
     }
     let leading_zero = integer.len() > 1 && integer.starts_with('0');
     let words = if leading_zero {
@@ -209,7 +269,13 @@ fn read_number(chars: &[char]) -> (Number, usize) {
     } else {
         cardinal(value)
     };
-    (Number { words, is_one: value == 1 }, len)
+    (
+        Number {
+            words,
+            is_one: value == 1,
+        },
+        len,
+    )
 }
 
 #[cfg(test)]
@@ -237,8 +303,14 @@ mod tests {
             ("It costs $5.", "It costs five dollars."),
             ("Only $1 left", "Only one dollar left"),
             ("Pi is 3.14 roughly", "Pi is three point one four roughly"),
-            ("In 1999 and 2024, then 2005.", "In nineteen ninety nine and twenty twenty four, then two thousand five."),
-            ("1,234,567 people", "one million two hundred thirty four thousand five hundred sixty seven people"),
+            (
+                "In 1999 and 2024, then 2005.",
+                "In nineteen ninety nine and twenty twenty four, then two thousand five.",
+            ),
+            (
+                "1,234,567 people",
+                "one million two hundred thirty four thousand five hundred sixty seven people",
+            ),
             ("the 2nd and 31st", "the second and thirty first"),
             ("50% off", "fifty percent off"),
             ("R&D", "R and D"),
@@ -256,6 +328,9 @@ mod tests {
 
     #[test]
     fn huge_numbers_are_read_digit_by_digit() {
-        assert_eq!(spell_out_english("12345678901234567890"), digits("12345678901234567890"));
+        assert_eq!(
+            spell_out_english("12345678901234567890"),
+            digits("12345678901234567890")
+        );
     }
 }

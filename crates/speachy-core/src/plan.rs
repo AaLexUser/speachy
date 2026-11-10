@@ -39,7 +39,11 @@ struct Choice<'a> {
 const MIN_WEIGHT_FOR_OWN_LANGUAGE: usize = 40;
 
 /// Plans how to speak `text` with the `installed` models.
-pub fn plan(text: &str, settings: &Settings, installed: &[&ModelInfo]) -> Result<Vec<PlannedChunk>, PlanError> {
+pub fn plan(
+    text: &str,
+    settings: &Settings,
+    installed: &[&ModelInfo],
+) -> Result<Vec<PlannedChunk>, PlanError> {
     let chunks = text::chunk(text, &ChunkOptions::default());
     if chunks.is_empty() {
         return Err(PlanError::NothingToSay);
@@ -59,7 +63,9 @@ pub fn plan(text: &str, settings: &Settings, installed: &[&ModelInfo]) -> Result
     };
     let detect = |s: &str| crate::lang::detect(s, &candidates);
     let text_lang = if settings.auto_detect_language {
-        detect(text).filter(|d| d.reliable || text::weight(text) >= MIN_WEIGHT_FOR_OWN_LANGUAGE).map(|d| d.code.to_string())
+        detect(text)
+            .filter(|d| d.reliable || text::weight(text) >= MIN_WEIGHT_FOR_OWN_LANGUAGE)
+            .map(|d| d.code.to_string())
     } else {
         None
     }
@@ -68,8 +74,12 @@ pub fn plan(text: &str, settings: &Settings, installed: &[&ModelInfo]) -> Result
     Ok(chunks
         .into_iter()
         .map(|chunk| {
-            let lang = if settings.auto_detect_language && text::weight(&chunk.text) >= MIN_WEIGHT_FOR_OWN_LANGUAGE {
-                detect(&chunk.text).filter(|d| d.reliable).map_or(text_lang.clone(), |d| d.code.to_string())
+            let lang = if settings.auto_detect_language
+                && text::weight(&chunk.text) >= MIN_WEIGHT_FOR_OWN_LANGUAGE
+            {
+                detect(&chunk.text)
+                    .filter(|d| d.reliable)
+                    .map_or(text_lang.clone(), |d| d.code.to_string())
             } else {
                 text_lang.clone()
             };
@@ -78,7 +88,10 @@ pub fn plan(text: &str, settings: &Settings, installed: &[&ModelInfo]) -> Result
                 text: chunk.text,
                 boundary: chunk.boundary,
                 lang,
-                engine: EngineKey { model_id: choice.model.id.clone(), variant: choice.voice.variant.clone() },
+                engine: EngineKey {
+                    model_id: choice.model.id.clone(),
+                    variant: choice.voice.variant.clone(),
+                },
                 sid: choice.voice.sid,
                 model_id: choice.model.id.clone(),
                 voice_id: choice.voice.id.clone(),
@@ -89,7 +102,10 @@ pub fn plan(text: &str, settings: &Settings, installed: &[&ModelInfo]) -> Result
 
 fn lookup<'a>(voice: &VoiceRef, installed: &[&'a ModelInfo]) -> Option<Choice<'a>> {
     let model = installed.iter().find(|m| m.id == voice.model_id)?;
-    Some(Choice { model, voice: model.voice(&voice.voice_id)? })
+    Some(Choice {
+        model,
+        voice: model.voice(&voice.voice_id)?,
+    })
 }
 
 fn default_choice<'a>(settings: &Settings, installed: &[&'a ModelInfo]) -> Option<Choice<'a>> {
@@ -97,7 +113,12 @@ fn default_choice<'a>(settings: &Settings, installed: &[&'a ModelInfo]) -> Optio
         .default_voice
         .as_ref()
         .and_then(|v| lookup(v, installed))
-        .or_else(|| installed.first().map(|model| Choice { model, voice: model.default_voice() }))
+        .or_else(|| {
+            installed.first().map(|model| Choice {
+                model,
+                voice: model.default_voice(),
+            })
+        })
 }
 
 /// The voice that would read `lang`, and the language it will actually be
@@ -110,12 +131,26 @@ fn resolve<'a>(
 ) -> (Choice<'a>, String) {
     let speaks = |c: &Choice| c.voice.languages.iter().any(|l| l == lang);
     // 1. The user's explicit choice for this language.
-    if let Some(choice) = settings.language_voices.get(lang).and_then(|v| lookup(v, installed)).filter(speaks) {
+    if let Some(choice) = settings
+        .language_voices
+        .get(lang)
+        .and_then(|v| lookup(v, installed))
+        .filter(speaks)
+    {
         return (choice, lang.to_string());
     }
     // 2. The default voice, or another voice of its model.
-    if let Some(voice) = default.model.voice_for_language(lang, Some(&default.voice.id)) {
-        return (Choice { model: default.model, voice }, lang.to_string());
+    if let Some(voice) = default
+        .model
+        .voice_for_language(lang, Some(&default.voice.id))
+    {
+        return (
+            Choice {
+                model: default.model,
+                voice,
+            },
+            lang.to_string(),
+        );
     }
     // 3. Any other installed model that covers the language.
     for model in installed {
@@ -125,27 +160,42 @@ fn resolve<'a>(
     }
     // 4. Nothing speaks it: read with the default voice in its own language.
     let own = default.voice.languages[0].clone();
-    (Choice { model: default.model, voice: default.voice }, own)
+    (
+        Choice {
+            model: default.model,
+            voice: default.voice,
+        },
+        own,
+    )
 }
 
 /// The voice a preview or a fixed-language request should use.
 pub fn voice_for(settings: &Settings, installed: &[&ModelInfo], lang: &str) -> Option<VoiceRef> {
     let default = default_choice(settings, installed)?;
     let (choice, _) = resolve(lang, settings, installed, &default);
-    Some(VoiceRef { model_id: choice.model.id.clone(), voice_id: choice.voice.id.clone() })
+    Some(VoiceRef {
+        model_id: choice.model.id.clone(),
+        voice_id: choice.voice.id.clone(),
+    })
 }
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
     use crate::catalog::find;
 
-    const EN: &str = "The quick brown fox jumps over the lazy dog and keeps running through the forest.";
-    const RU: &str = "Привет! Это проверка синтеза речи на русском языке, сегодня очень хорошая погода.";
+    const EN: &str =
+        "The quick brown fox jumps over the lazy dog and keeps running through the forest.";
+    const RU: &str =
+        "Привет! Это проверка синтеза речи на русском языке, сегодня очень хорошая погода.";
     const ZH: &str = "今天天气很好，我们一起去公园散步吧，然后再去喝一杯咖啡。";
 
     fn voice(model: &str, voice: &str) -> VoiceRef {
-        VoiceRef { model_id: model.into(), voice_id: voice.into() }
+        VoiceRef {
+            model_id: model.into(),
+            voice_id: voice.into(),
+        }
     }
 
     #[test]
@@ -153,7 +203,10 @@ mod tests {
         let settings = Settings::default();
         assert_eq!(plan(EN, &settings, &[]), Err(PlanError::NoModel));
         let supertonic = find("supertonic-3").unwrap();
-        assert_eq!(plan(" \n ", &settings, &[supertonic]), Err(PlanError::NothingToSay));
+        assert_eq!(
+            plan(" \n ", &settings, &[supertonic]),
+            Err(PlanError::NothingToSay)
+        );
     }
 
     #[test]
@@ -173,23 +226,46 @@ mod tests {
         let kokoro = find("kokoro-v1.0").unwrap();
         let mut settings = Settings::default();
         settings.default_voice = Some(voice("kokoro-v1.0", "bm_george"));
-        settings.language_voices.insert("ru".into(), voice("supertonic-3", "F3"));
+        settings
+            .language_voices
+            .insert("ru".into(), voice("supertonic-3", "F3"));
         let installed = [kokoro, supertonic];
 
         let en = plan(EN, &settings, &installed).unwrap();
-        assert_eq!((en[0].model_id.as_str(), en[0].voice_id.as_str()), ("kokoro-v1.0", "bm_george"));
+        assert_eq!(
+            (en[0].model_id.as_str(), en[0].voice_id.as_str()),
+            ("kokoro-v1.0", "bm_george")
+        );
         assert_eq!(en[0].engine.variant.as_deref(), Some("gb"));
 
         let ru = plan(RU, &settings, &installed).unwrap();
-        assert_eq!((ru[0].model_id.as_str(), ru[0].voice_id.as_str(), ru[0].lang.as_str()), ("supertonic-3", "F3", "ru"));
+        assert_eq!(
+            (
+                ru[0].model_id.as_str(),
+                ru[0].voice_id.as_str(),
+                ru[0].lang.as_str()
+            ),
+            ("supertonic-3", "F3", "ru")
+        );
 
         // The default voice cannot read Chinese; a voice of its model can.
         let zh = plan(ZH, &settings, &installed).unwrap();
-        assert_eq!((zh[0].model_id.as_str(), zh[0].voice_id.as_str()), ("kokoro-v1.0", "zf_xiaobei"));
+        assert_eq!(
+            (zh[0].model_id.as_str(), zh[0].voice_id.as_str()),
+            ("kokoro-v1.0", "zf_xiaobei")
+        );
 
         // German: not covered by Kokoro, falls through to the other model.
-        let de = plan("Dies ist ein Test der Sprachsynthese, und das Wetter ist heute wirklich schön.", &settings, &installed).unwrap();
-        assert_eq!((de[0].model_id.as_str(), de[0].lang.as_str()), ("supertonic-3", "de"));
+        let de = plan(
+            "Dies ist ein Test der Sprachsynthese, und das Wetter ist heute wirklich schön.",
+            &settings,
+            &installed,
+        )
+        .unwrap();
+        assert_eq!(
+            (de[0].model_id.as_str(), de[0].lang.as_str()),
+            ("supertonic-3", "de")
+        );
     }
 
     #[test]
@@ -222,7 +298,12 @@ mod tests {
     #[test]
     fn short_chunks_inherit_the_language_of_the_text() {
         let supertonic = find("supertonic-3").unwrap();
-        let planned = plan(&format!("{RU} Ок. Да."), &Settings::default(), &[supertonic]).unwrap();
+        let planned = plan(
+            &format!("{RU} Ок. Да."),
+            &Settings::default(),
+            &[supertonic],
+        )
+        .unwrap();
         assert!(planned.iter().all(|c| c.lang == "ru"), "{planned:?}");
     }
 }

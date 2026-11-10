@@ -31,7 +31,12 @@ pub fn notice(app: &AppHandle, message: &str) {
 /// otherwise voices follow the user's settings and the detected language.
 ///
 /// With `lang`, the text is read in that language instead of detecting it.
-pub fn speak(app: &AppHandle, text: &str, voice: Option<VoiceRef>, lang: Option<String>) -> Result<(), String> {
+pub fn speak(
+    app: &AppHandle,
+    text: &str,
+    voice: Option<VoiceRef>,
+    lang: Option<String>,
+) -> Result<(), String> {
     let state = app.state::<AppState>();
     let mut settings = state.settings.read().unwrap().clone();
     if let Some(voice) = voice {
@@ -88,7 +93,10 @@ pub fn speak_selection(app: &AppHandle) {
             if selection::accessibility_granted() {
                 notice(app, "No text is selected");
             } else {
-                notice(app, "Speachy needs Accessibility access to read the selection");
+                notice(
+                    app,
+                    "Speachy needs Accessibility access to read the selection",
+                );
                 crate::windows::show_main(app);
             }
         }
@@ -118,7 +126,9 @@ pub fn preload(app: &AppHandle) {
         }
         let installed = state.models.installed();
         // Plan a token text to find out which engine the default voice uses.
-        let Ok(chunks) = plan::plan("preload", &settings, &installed) else { return };
+        let Ok(chunks) = plan::plan("preload", &settings, &installed) else {
+            return;
+        };
         use speachy_core::engine::EngineProvider;
         if let Err(err) = state.engines.engine(&chunks[0].engine) {
             log::warn!("could not preload {}: {err:#}", chunks[0].model_id);

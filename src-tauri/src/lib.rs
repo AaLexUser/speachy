@@ -26,13 +26,19 @@ fn on_speech_event(app: &AppHandle, event: &SpeechEvent) {
     let _ = app.emit("speech", event);
     match event {
         SpeechEvent::Started { .. } => {
-            let show = app.try_state::<AppState>().is_some_and(|s| s.settings.read().unwrap().show_overlay);
+            let show = app
+                .try_state::<AppState>()
+                .is_some_and(|s| s.settings.read().unwrap().show_overlay);
             if show {
                 windows::show_overlay(app);
             }
         }
         SpeechEvent::State { state: State::Idle } => windows::hide_overlay(app),
-        SpeechEvent::Finished { outcome: Outcome::Failed, message, .. } => {
+        SpeechEvent::Finished {
+            outcome: Outcome::Failed,
+            message,
+            ..
+        } => {
             speech::notice(app, message.as_deref().unwrap_or("Speech failed"));
         }
         _ => {}
@@ -47,9 +53,15 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(&models_dir)?;
 
     let settings = Settings::load(&settings_path);
-    let engines = Arc::new(EngineCache::new(models_dir.clone(), settings.effective_threads(), 2));
+    let engines = Arc::new(EngineCache::new(
+        models_dir.clone(),
+        settings.effective_threads(),
+        2,
+    ));
     let listener_handle = handle.clone();
-    let speaker = Speaker::new(engines.clone(), Arc::new(SystemAudio), move |event| on_speech_event(&listener_handle, event));
+    let speaker = Speaker::new(engines.clone(), Arc::new(SystemAudio), move |event| {
+        on_speech_event(&listener_handle, event)
+    });
 
     let hidden = settings.start_hidden || std::env::args().any(|arg| arg == HIDDEN_FLAG);
     let shortcuts = settings.shortcuts.clone();
@@ -81,9 +93,18 @@ pub fn run() {
 
     let app = tauri::Builder::default()
         // Must be the first plugin: a second launch only raises the window.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| windows::show_main(app)))
-        .plugin(tauri_plugin_global_shortcut::Builder::new().with_handler(shortcuts::handle).build())
-        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec![HIDDEN_FLAG])))
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            windows::show_main(app)
+        }))
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(shortcuts::handle)
+                .build(),
+        )
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![HIDDEN_FLAG]),
+        ))
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             commands::get_snapshot,
@@ -112,7 +133,9 @@ pub fn run() {
 
     app.run(|app, event| match event {
         // No window left is not a reason to quit: only "Quit" exits.
-        RunEvent::ExitRequested { api, code: None, .. } => api.prevent_exit(),
+        RunEvent::ExitRequested {
+            api, code: None, ..
+        } => api.prevent_exit(),
         RunEvent::Exit => {
             if let Some(state) = app.try_state::<AppState>() {
                 state.speaker.stop();

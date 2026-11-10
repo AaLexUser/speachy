@@ -38,8 +38,9 @@ pub struct VoiceInfo {
     pub languages: Vec<String>,
     /// Accent / flavour shown next to the name (e.g. `US`, `British`).
     pub accent: Option<String>,
-    /// Which lexicon set the engine must be loaded with (Kokoro only). Two
-    /// voices with different variants need separately loaded engines.
+    /// How the engine must be loaded for this voice (Kokoro only: `us`,
+    /// `gb` or `zh` pick the lexicons and text rules). Two voices with
+    /// different variants need separately loaded engines.
     pub variant: Option<String>,
 }
 
@@ -138,15 +139,17 @@ fn build() -> Vec<ModelInfo> {
             "KittenTTS Nano 0.2",
             "kitten-nano-en-v0_2-fp16",
             26_586_708,
-            "Tiny 15M-parameter English model. Smallest download and very fast; quality is a \
-             step below the larger models.",
+            "Tiny 15M-parameter English model: the smallest download, and very fast. Quality \
+             is a step below the larger models, and words missing from its dictionary \
+             (unusual names, jargon) are skipped.",
         ),
         kitten(
             "kitten-mini-v0.1",
             "KittenTTS Mini 0.1",
             "kitten-mini-en-v0_1-fp16",
             156_630_103,
-            "80M-parameter English model with the KittenTTS voice set.",
+            "80M-parameter English model with the KittenTTS voice set. Words missing from \
+             its dictionary are skipped.",
         ),
     ]
 }
@@ -250,8 +253,7 @@ fn kokoro(id: &str, name: &str, dir: &str, size: u64, description: &str) -> Mode
             let (languages, accent, variant) = match &prefix[..1] {
                 "a" => (strings(&["en"]), "US", "us"),
                 "b" => (strings(&["en"]), "British", "gb"),
-                // Chinese voices read embedded English with the US lexicon.
-                _ => (strings(&["zh", "en"]), "Mandarin", "us"),
+                _ => (strings(&["zh", "en"]), "Mandarin", "zh"),
             };
             let mut name = short.to_string();
             name[..1].make_ascii_uppercase();
@@ -382,15 +384,29 @@ mod tests {
         let mut ids = HashSet::new();
         for m in catalog() {
             assert!(ids.insert(&m.id), "duplicate model id {}", m.id);
-            assert!(m.voice(&m.default_voice).is_some(), "{}: bad default voice", m.id);
+            assert!(
+                m.voice(&m.default_voice).is_some(),
+                "{}: bad default voice",
+                m.id
+            );
             let mut voice_ids = HashSet::new();
             let mut sids = HashSet::new();
             for v in &m.voices {
-                assert!(voice_ids.insert(&v.id), "{}: duplicate voice {}", m.id, v.id);
+                assert!(
+                    voice_ids.insert(&v.id),
+                    "{}: duplicate voice {}",
+                    m.id,
+                    v.id
+                );
                 assert!(sids.insert(v.sid), "{}: duplicate sid {}", m.id, v.sid);
                 assert!(!v.languages.is_empty());
                 for l in &v.languages {
-                    assert!(m.languages.contains(l), "{}: {} speaks unlisted {l}", m.id, v.id);
+                    assert!(
+                        m.languages.contains(l),
+                        "{}: {} speaks unlisted {l}",
+                        m.id,
+                        v.id
+                    );
                     assert_ne!(language_name(l), "Unknown", "no display name for {l}");
                 }
             }
@@ -400,11 +416,26 @@ mod tests {
     #[test]
     fn voice_for_language_prefers_the_requested_voice() {
         let kokoro = find("kokoro-v1.0").unwrap();
-        assert_eq!(kokoro.voice_for_language("en", Some("bm_george")).unwrap().id, "bm_george");
+        assert_eq!(
+            kokoro
+                .voice_for_language("en", Some("bm_george"))
+                .unwrap()
+                .id,
+            "bm_george"
+        );
         // A US voice cannot read Chinese, so a Chinese voice is substituted.
-        assert_eq!(kokoro.voice_for_language("zh", Some("af_heart")).unwrap().id, "zf_xiaobei");
+        assert_eq!(
+            kokoro
+                .voice_for_language("zh", Some("af_heart"))
+                .unwrap()
+                .id,
+            "zf_xiaobei"
+        );
         assert!(kokoro.voice_for_language("ru", None).is_none());
         let supertonic = find("supertonic-3").unwrap();
-        assert_eq!(supertonic.voice_for_language("ru", Some("M2")).unwrap().sid, 6);
+        assert_eq!(
+            supertonic.voice_for_language("ru", Some("M2")).unwrap().sid,
+            6
+        );
     }
 }

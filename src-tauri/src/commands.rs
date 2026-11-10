@@ -89,7 +89,13 @@ pub fn install_model(app: AppHandle, state: State<AppState>, id: String) -> Resu
         if downloads.contains_key(&id) {
             return Ok(());
         }
-        downloads.insert(id.clone(), Download { cancel: cancel.clone(), progress: None });
+        downloads.insert(
+            id.clone(),
+            Download {
+                cancel: cancel.clone(),
+                progress: None,
+            },
+        );
     }
     std::thread::spawn(move || {
         let state = app.state::<AppState>();
@@ -101,7 +107,15 @@ pub fn install_model(app: AppHandle, state: State<AppState>, id: String) -> Resu
             let mut last = last_emit.lock().unwrap();
             if last.elapsed() >= Duration::from_millis(100) {
                 *last = Instant::now();
-                let _ = app.emit("download", DownloadEvent { id: model.id.clone(), progress: Some(progress), finished: false, error: None });
+                let _ = app.emit(
+                    "download",
+                    DownloadEvent {
+                        id: model.id.clone(),
+                        progress: Some(progress),
+                        finished: false,
+                        error: None,
+                    },
+                );
             }
         });
         state.downloads.lock().unwrap().remove(&model.id);
@@ -113,9 +127,15 @@ pub fn install_model(app: AppHandle, state: State<AppState>, id: String) -> Resu
         if result.is_ok() {
             // The first model installed becomes the default voice.
             let mut settings = state.settings.write().unwrap();
-            let has_default = settings.default_voice.as_ref().is_some_and(|v| state.models.is_installed(&v.model_id));
+            let has_default = settings
+                .default_voice
+                .as_ref()
+                .is_some_and(|v| state.models.is_installed(&v.model_id));
             if !has_default {
-                settings.default_voice = Some(VoiceRef { model_id: model.id.clone(), voice_id: model.default_voice.clone() });
+                settings.default_voice = Some(VoiceRef {
+                    model_id: model.id.clone(),
+                    voice_id: model.default_voice.clone(),
+                });
                 if let Err(err) = settings.save(&state.settings_path) {
                     log::warn!("could not save settings: {err}");
                 }
@@ -123,7 +143,15 @@ pub fn install_model(app: AppHandle, state: State<AppState>, id: String) -> Resu
             drop(settings);
             speech::preload(&app);
         }
-        let _ = app.emit("download", DownloadEvent { id: model.id.clone(), progress: None, finished: true, error });
+        let _ = app.emit(
+            "download",
+            DownloadEvent {
+                id: model.id.clone(),
+                progress: None,
+                finished: true,
+                error,
+            },
+        );
     });
     Ok(())
 }
@@ -146,11 +174,20 @@ pub fn remove_model(state: State<AppState>, id: String) -> Result<Snapshot, Stri
     state.models.remove(&id).map_err(|err| format!("{err:#}"))?;
     {
         let mut settings = state.settings.write().unwrap();
-        if settings.default_voice.as_ref().is_some_and(|v| v.model_id == id) {
-            settings.default_voice = state.models.installed().first().map(|m| VoiceRef { model_id: m.id.clone(), voice_id: m.default_voice.clone() });
+        if settings
+            .default_voice
+            .as_ref()
+            .is_some_and(|v| v.model_id == id)
+        {
+            settings.default_voice = state.models.installed().first().map(|m| VoiceRef {
+                model_id: m.id.clone(),
+                voice_id: m.default_voice.clone(),
+            });
         }
         settings.language_voices.retain(|_, v| v.model_id != id);
-        settings.save(&state.settings_path).map_err(|err| err.to_string())?;
+        settings
+            .save(&state.settings_path)
+            .map_err(|err| err.to_string())?;
     }
     Ok(snapshot(&state))
 }
@@ -164,7 +201,11 @@ pub struct SettingsUpdate {
 
 /// Applies a partial update: `patch` holds only the fields that changed.
 #[tauri::command]
-pub fn update_settings(app: AppHandle, state: State<AppState>, patch: serde_json::Value) -> Result<SettingsUpdate, String> {
+pub fn update_settings(
+    app: AppHandle,
+    state: State<AppState>,
+    patch: serde_json::Value,
+) -> Result<SettingsUpdate, String> {
     let serde_json::Value::Object(patch) = patch else {
         return Err("settings update must be an object".into());
     };
@@ -173,17 +214,27 @@ pub fn update_settings(app: AppHandle, state: State<AppState>, patch: serde_json
     for (key, value) in patch {
         match (merged.get_mut(&key), value) {
             // Nested objects (shortcuts) merge field by field.
-            (Some(serde_json::Value::Object(target)), serde_json::Value::Object(fields)) if key == "shortcuts" => target.extend(fields),
+            (Some(serde_json::Value::Object(target)), serde_json::Value::Object(fields))
+                if key == "shortcuts" =>
+            {
+                target.extend(fields)
+            }
             (Some(slot), value) => *slot = value,
             (None, _) => return Err(format!("unknown setting {key}")),
         }
     }
-    let mut new: Settings = serde_json::from_value(merged).map_err(|err| format!("invalid settings: {err}"))?;
+    let mut new: Settings =
+        serde_json::from_value(merged).map_err(|err| format!("invalid settings: {err}"))?;
     new.sanitize();
-    for keys in [&new.shortcuts.speak_selection, &new.shortcuts.pause_resume, &new.shortcuts.stop] {
+    for keys in [
+        &new.shortcuts.speak_selection,
+        &new.shortcuts.pause_resume,
+        &new.shortcuts.stop,
+    ] {
         shortcuts::validate(keys)?;
     }
-    new.save(&state.settings_path).map_err(|err| format!("could not save settings: {err}"))?;
+    new.save(&state.settings_path)
+        .map_err(|err| format!("could not save settings: {err}"))?;
     *state.settings.write().unwrap() = new.clone();
 
     let mut shortcut_errors = Vec::new();
@@ -195,7 +246,11 @@ pub fn update_settings(app: AppHandle, state: State<AppState>, patch: serde_json
     }
     if new.launch_at_login != old.launch_at_login {
         let autostart = app.autolaunch();
-        let result = if new.launch_at_login { autostart.enable() } else { autostart.disable() };
+        let result = if new.launch_at_login {
+            autostart.enable()
+        } else {
+            autostart.disable()
+        };
         if let Err(err) = result {
             log::warn!("could not change launch at login: {err}");
         }
@@ -204,7 +259,10 @@ pub fn update_settings(app: AppHandle, state: State<AppState>, patch: serde_json
         speech::preload(&app);
     }
     let _ = app.emit("settings", &new);
-    Ok(SettingsUpdate { settings: new, shortcut_errors })
+    Ok(SettingsUpdate {
+        settings: new,
+        shortcut_errors,
+    })
 }
 
 /// While the settings window records a new shortcut, the global ones are
@@ -221,7 +279,12 @@ pub fn set_shortcuts_suspended(app: AppHandle, state: State<AppState>, suspended
 }
 
 #[tauri::command]
-pub fn speak_text(app: AppHandle, text: String, voice: Option<VoiceRef>, lang: Option<String>) -> Result<(), String> {
+pub fn speak_text(
+    app: AppHandle,
+    text: String,
+    voice: Option<VoiceRef>,
+    lang: Option<String>,
+) -> Result<(), String> {
     speech::speak(&app, &text, voice, lang)
 }
 

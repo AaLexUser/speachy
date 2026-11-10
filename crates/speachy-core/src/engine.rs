@@ -1,6 +1,7 @@
 //! Speech synthesis through sherpa-onnx.
 
 use crate::catalog::{Family, ModelInfo};
+use crate::english::Phonemizer;
 use anyhow::{anyhow, bail, Context, Result};
 use sherpa_onnx::{
     GenerationConfig, OfflineTts, OfflineTtsConfig, OfflineTtsKittenModelConfig,
@@ -60,6 +61,8 @@ pub trait EngineProvider: Send + Sync {
 pub struct SherpaEngine {
     tts: OfflineTts,
     family: Family,
+    /// English phonemizer, for the families that are given phonemes.
+    phonemizer: Option<Phonemizer>,
 }
 
 fn existing(dir: &Path, names: &[&str]) -> Result<String> {
@@ -68,12 +71,23 @@ fn existing(dir: &Path, names: &[&str]) -> Result<String> {
         .map(|n| dir.join(n))
         .find(|p| p.is_file())
         .map(|p| p.to_string_lossy().into_owned())
-        .ok_or_else(|| anyhow!("model file missing in {}: {}", dir.display(), names.join(" or ")))
+        .ok_or_else(|| {
+            anyhow!(
+                "model file missing in {}: {}",
+                dir.display(),
+                names.join(" or ")
+            )
+        })
 }
 
 impl SherpaEngine {
     /// Loads `model` from its installed directory `dir`.
-    pub fn load(model: &ModelInfo, dir: &Path, variant: Option<&str>, threads: i32) -> Result<Self> {
+    pub fn load(
+        model: &ModelInfo,
+        dir: &Path,
+        variant: Option<&str>,
+        threads: i32,
+    ) -> Result<Self> {
         let file = |names: &[&str]| existing(dir, names);
         let mut config = OfflineTtsConfig {
             model: OfflineTtsModelConfig {
@@ -87,9 +101,15 @@ impl SherpaEngine {
         match model.family {
             Family::Supertonic => {
                 config.model.supertonic = OfflineTtsSupertonicModelConfig {
-                    duration_predictor: Some(file(&["duration_predictor.int8.onnx", "duration_predictor.onnx"])?),
+                    duration_predictor: Some(file(&[
+                        "duration_predictor.int8.onnx",
+                        "duration_predictor.onnx",
+                    ])?),
                     text_encoder: Some(file(&["text_encoder.int8.onnx", "text_encoder.onnx"])?),
-                    vector_estimator: Some(file(&["vector_estimator.int8.onnx", "vector_estimator.onnx"])?),
+                    vector_estimator: Some(file(&[
+                        "vector_estimator.int8.onnx",
+                        "vector_estimator.onnx",
+                    ])?),
                     vocoder: Some(file(&["vocoder.int8.onnx", "vocoder.onnx"])?),
                     tts_json: Some(file(&["tts.json"])?),
                     unicode_indexer: Some(file(&["unicode_indexer.bin"])?),
@@ -101,11 +121,28 @@ impl SherpaEngine {
                     Some("gb") => "lexicon-gb-en.txt",
                     _ => "lexicon-us-en.txt",
                 };
+                if variant == Some("zh") {
+                    // Rules that read numbers, dates and phone numbers out
+                    // in Chinese.
+                    let rules: Vec<String> = ["date-zh.fst", "phone-zh.fst", "number-zh.fst"]
+                        .iter()
+                        .map(|name| dir.join(name))
+                        .filter(|path| path.is_file())
+                        .map(|path| path.to_string_lossy().into_owned())
+                        .collect();
+                    if !rules.is_empty() {
+                        config.rule_fsts = Some(rules.join(","));
+                    }
+                }
                 config.model.kokoro = OfflineTtsKokoroModelConfig {
                     model: Some(file(&["model.onnx", "model.int8.onnx"])?),
                     voices: Some(file(&["voices.bin"])?),
                     tokens: Some(file(&["tokens.txt"])?),
-                    lexicon: Some(format!("{},{}", file(&[english])?, file(&["lexicon-zh.txt"])?)),
+                    lexicon: Some(format!(
+                        "{},{}",
+                        file(&[english])?,
+                        file(&["lexicon-zh.txt"])?
+                    )),
                     ..Default::default()
                 };
             }
@@ -119,9 +156,20 @@ impl SherpaEngine {
                 };
             }
         }
-        let tts = OfflineTts::create(&config)
-            .with_context(|| format!("sherpa-onnx could not load {} from {}", model.name, dir.display()))?;
-        Ok(Self { tts, family: model.family })
+        let tts = OfflineTts::create(&config).with_context(|| {
+            format!(
+                "sherpa-onnx could not load {} from {}",
+                model.name,
+                dir.display()
+            )
+        })?;
+        let phonemizer =
+            (model.family == Family::Kokoro).then(|| Phonemizer::new(variant == Some("gb")));
+        Ok(Self {
+            tts,
+            family: model.family,
+            phonemizer,
+        })
     }
 
     pub fn sample_rate(&self) -> u32 {
@@ -138,18 +186,34 @@ impl Synthesizer for SherpaEngine {
         if self.family == Family::Supertonic {
             extra.insert("lang".to_string(), serde_json::json!(req.lang));
         }
-        // Lexicon-driven models only know words, so spell numbers out.
+        let mut text = req.text;
+        let mut phonemes = None;
         let normalized;
-        let text = if self.family != Family::Supertonic && req.lang == "en" {
-            normalized = crate::numbers::spell_out_english(req.text);
-            normalized.as_str()
-        } else {
-            req.text
-        };
+        match (self.family, &self.phonemizer) {
+            // Kokoro reads English from phonemes (see `crate::english`).
+            (Family::Kokoro, Some(phonemizer)) if req.lang == "en" => {
+                let sentences = phonemizer.phonemize(req.text);
+                if sentences.is_empty() {
+                    return Ok(Some(Audio {
+                        samples: Vec::new(),
+                        sample_rate: self.sample_rate().max(1),
+                    }));
+                }
+                phonemes = Some(sentences);
+                text = "";
+            }
+            // KittenTTS looks words up in a lexicon, which has no digits.
+            (Family::Kitten, _) if req.lang == "en" => {
+                normalized = crate::numbers::spell_out_english(req.text);
+                text = normalized.as_str();
+            }
+            _ => {}
+        }
         let config = GenerationConfig {
             sid: req.sid,
             speed: req.speed.clamp(0.25, 4.0),
             extra: Some(extra),
+            phoneme_codepoints: phonemes,
             ..Default::default()
         };
         let flag = cancel.clone();
@@ -208,11 +272,19 @@ impl EngineCache {
 
     /// Drops the engines of one model (it is being deleted).
     pub fn unload_model(&self, model_id: &str) {
-        self.loaded.lock().unwrap().retain(|(k, _)| k.model_id != model_id);
+        self.loaded
+            .lock()
+            .unwrap()
+            .retain(|(k, _)| k.model_id != model_id);
     }
 
     pub fn loaded_keys(&self) -> Vec<EngineKey> {
-        self.loaded.lock().unwrap().iter().map(|(k, _)| k.clone()).collect()
+        self.loaded
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(k, _)| k.clone())
+            .collect()
     }
 }
 
@@ -229,8 +301,18 @@ impl EngineProvider for EngineCache {
             .ok_or_else(|| anyhow!("unknown model {}", key.model_id))?;
         let dir = self.models_dir.join(&model.id);
         let started = std::time::Instant::now();
-        let engine = Arc::new(SherpaEngine::load(model, &dir, key.variant.as_deref(), self.threads)?);
-        log::info!("loaded {} ({:?}) in {:.2}s", model.id, key.variant, started.elapsed().as_secs_f32());
+        let engine = Arc::new(SherpaEngine::load(
+            model,
+            &dir,
+            key.variant.as_deref(),
+            self.threads,
+        )?);
+        log::info!(
+            "loaded {} ({:?}) in {:.2}s",
+            model.id,
+            key.variant,
+            started.elapsed().as_secs_f32()
+        );
         let mut loaded = self.loaded.lock().unwrap();
         while loaded.len() >= self.capacity {
             loaded.remove(0);

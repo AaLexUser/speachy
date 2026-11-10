@@ -535,8 +535,10 @@ function onKeyDown(e) {
   if (mods.length === 1 && mods[0] === "Shift" && !functionKey) return toast("Shift alone is not enough for a global shortcut.");
   const field = S.recording;
   S.recording = null;
-  // Saving re-registers the shortcuts, which also ends the suspension.
-  saveSettings({ shortcuts: { [field]: [...mods, e.code].join("+") } }).catch(stopRecording);
+  // Whether or not the save succeeds, the global shortcuts come back.
+  saveSettings({ shortcuts: { [field]: [...mods, e.code].join("+") } })
+    .catch(() => {})
+    .then(stopRecording);
 }
 
 document.getElementById("nav").addEventListener("click", (e) => {
@@ -568,6 +570,9 @@ main.addEventListener("input", (e) => {
 });
 
 window.addEventListener("keydown", onKeyDown, true);
+// Never leave the global shortcuts released because the window lost focus
+// in the middle of recording one.
+window.addEventListener("blur", () => S.recording && stopRecording());
 // The window may have been hidden while permissions changed in System Settings.
 window.addEventListener("focus", () => S.snap && !S.recording && refresh());
 

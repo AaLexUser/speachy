@@ -63,7 +63,10 @@ impl ModelManager {
 
     /// Installed models, in catalog order.
     pub fn installed(&self) -> Vec<&'static ModelInfo> {
-        catalog::catalog().iter().filter(|m| self.is_installed(&m.id)).collect()
+        catalog::catalog()
+            .iter()
+            .filter(|m| self.is_installed(&m.id))
+            .collect()
     }
 
     /// Bytes of a partial download waiting to be resumed.
@@ -81,7 +84,12 @@ impl ModelManager {
 
     /// Downloads and installs `model`. Safe to call again after a failure
     /// or cancellation: the archive download resumes where it stopped.
-    pub fn install(&self, model: &ModelInfo, cancel: &AtomicBool, progress: &dyn Fn(Progress)) -> Result<()> {
+    pub fn install(
+        &self,
+        model: &ModelInfo,
+        cancel: &AtomicBool,
+        progress: &dyn Fn(Progress),
+    ) -> Result<()> {
         if self.is_installed(&model.id) {
             return Ok(());
         }
@@ -93,7 +101,11 @@ impl ModelManager {
         let part = self.part_path(&model.id);
         download(&model.archive_url, &part, cancel, &|done, len| {
             let total = len.map_or(total, |len| len + extras);
-            progress(Progress { phase: Phase::Downloading, done_bytes: done, total_bytes: total });
+            progress(Progress {
+                phase: Phase::Downloading,
+                done_bytes: done,
+                total_bytes: total,
+            });
         })
         .with_context(|| format!("downloading {}", model.name))?;
 
@@ -108,12 +120,22 @@ impl ModelManager {
                 inner: File::open(&part)?,
                 done: 0,
                 cancel,
-                report: &|done| progress(Progress { phase: Phase::Extracting, done_bytes: done, total_bytes: archive_len }),
+                report: &|done| {
+                    progress(Progress {
+                        phase: Phase::Extracting,
+                        done_bytes: done,
+                        total_bytes: archive_len,
+                    })
+                },
             };
-            let mut archive = tar::Archive::new(bzip2::read::BzDecoder::new(io::BufReader::new(counted)));
+            let mut archive =
+                tar::Archive::new(bzip2::read::BzDecoder::new(io::BufReader::new(counted)));
             archive.set_preserve_permissions(false);
             archive.set_unpack_xattrs(false);
-            archive.unpack(&staging).map_err(unwrap_cancelled).context("unpacking the model archive")?;
+            archive
+                .unpack(&staging)
+                .map_err(unwrap_cancelled)
+                .context("unpacking the model archive")?;
 
             let unpacked = staging.join(&model.archive_dir);
             if !unpacked.is_dir() {
@@ -124,7 +146,11 @@ impl ModelManager {
                 let target = unpacked.join(&extra.filename);
                 let base = done;
                 download(&extra.url, &target, cancel, &|bytes, _| {
-                    progress(Progress { phase: Phase::Downloading, done_bytes: base + bytes, total_bytes: total });
+                    progress(Progress {
+                        phase: Phase::Downloading,
+                        done_bytes: base + bytes,
+                        total_bytes: total,
+                    });
                 })
                 .with_context(|| format!("downloading {}", extra.filename))?;
                 done += extra.size_bytes;
@@ -218,7 +244,12 @@ fn agent() -> ureq::Agent {
 
 /// Downloads `url` to `target`, resuming if `target` already has data.
 /// `progress` receives the bytes on disk and, if known, the full length.
-fn download(url: &str, target: &Path, cancel: &AtomicBool, progress: &dyn Fn(u64, Option<u64>)) -> Result<()> {
+fn download(
+    url: &str,
+    target: &Path,
+    cancel: &AtomicBool,
+    progress: &dyn Fn(u64, Option<u64>),
+) -> Result<()> {
     const ATTEMPTS: u32 = 4;
     let agent = agent();
     let mut attempt = 0;
@@ -256,11 +287,17 @@ fn download_once(
     if have > 0 {
         request = request.header("Range", format!("bytes={have}-"));
     }
-    let response = request.call().map_err(|err| anyhow!("could not reach the download server: {err}"))?;
+    let response = request
+        .call()
+        .map_err(|err| anyhow!("could not reach the download server: {err}"))?;
     let status = response.status().as_u16();
     let content_length = response.body().content_length();
     let (mut file, mut done, total) = match status {
-        206 => (OpenOptions::new().append(true).open(target)?, have, content_length.map(|len| have + len)),
+        206 => (
+            OpenOptions::new().append(true).open(target)?,
+            have,
+            content_length.map(|len| have + len),
+        ),
         200 => (File::create(target)?, 0, content_length),
         // The server has nothing past what we hold: the file is complete.
         416 if have > 0 => return Ok(()),
@@ -326,7 +363,10 @@ mod tests {
                 let head = if start > 0 {
                     format!("HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", slice.len())
                 } else {
-                    format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", slice.len())
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        slice.len()
+                    )
                 };
                 let _ = stream.write_all(head.as_bytes());
                 let send = match cut_first_at {
@@ -347,7 +387,9 @@ mod tests {
             header.set_size(data.len() as u64);
             header.set_mode(0o644);
             header.set_cksum();
-            builder.append_data(&mut header, format!("{dir}/{name}"), *data).unwrap();
+            builder
+                .append_data(&mut header, format!("{dir}/{name}"), *data)
+                .unwrap();
         }
         builder.into_inner().unwrap().finish().unwrap()
     }
@@ -365,8 +407,13 @@ mod tests {
 
     #[test]
     fn installs_resumes_and_removes() {
-        let payload: Vec<u8> = (0..300_000u32).map(|i| (i.wrapping_mul(2_654_435_761) >> 24) as u8).collect();
-        let bytes = archive("kitten", &[("model.onnx", &payload), ("tokens.txt", b"a 1\n")]);
+        let payload: Vec<u8> = (0..300_000u32)
+            .map(|i| (i.wrapping_mul(2_654_435_761) >> 24) as u8)
+            .collect();
+        let bytes = archive(
+            "kitten",
+            &[("model.onnx", &payload), ("tokens.txt", b"a 1\n")],
+        );
         // The first response is cut short; the retry must resume with a Range.
         let (url, requests) = serve(bytes.clone(), Some(bytes.len() / 3));
         let (extra_url, _) = serve(b"hello || h e l o\n".to_vec(), None);
@@ -387,14 +434,31 @@ mod tests {
             })
             .unwrap();
 
-        assert!(requests.load(Ordering::SeqCst) >= 2, "the download was resumed");
+        assert!(
+            requests.load(Ordering::SeqCst) >= 2,
+            "the download was resumed"
+        );
         assert!(manager.is_installed(&model.id));
         let installed = manager.model_dir(&model.id);
         assert_eq!(fs::read(installed.join("model.onnx")).unwrap(), payload);
-        assert_eq!(fs::read(installed.join("lexicon-en-us.txt")).unwrap(), b"hello || h e l o\n");
-        assert_eq!(*phases.lock().unwrap(), [Phase::Downloading, Phase::Extracting, Phase::Downloading]);
-        assert_eq!(manager.partial_bytes(&model), 0, "the archive is deleted after install");
-        assert!(fs::read_dir(manager.root()).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().contains("staging")));
+        assert_eq!(
+            fs::read(installed.join("lexicon-en-us.txt")).unwrap(),
+            b"hello || h e l o\n"
+        );
+        assert_eq!(
+            *phases.lock().unwrap(),
+            [Phase::Downloading, Phase::Extracting, Phase::Downloading]
+        );
+        assert_eq!(
+            manager.partial_bytes(&model),
+            0,
+            "the archive is deleted after install"
+        );
+        assert!(fs::read_dir(manager.root()).unwrap().all(|e| !e
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains("staging")));
 
         manager.remove(&model.id).unwrap();
         assert!(!manager.is_installed(&model.id));
@@ -421,7 +485,9 @@ mod tests {
         assert!(!manager.is_installed(&model.id));
 
         // Trying again completes the install.
-        manager.install(&model, &AtomicBool::new(false), &|_| {}).unwrap();
+        manager
+            .install(&model, &AtomicBool::new(false), &|_| {})
+            .unwrap();
         assert!(manager.is_installed(&model.id));
     }
 
@@ -431,8 +497,14 @@ mod tests {
         let model = test_model(url, None);
         let dir = tempfile::tempdir().unwrap();
         let manager = ModelManager::new(dir.path().to_path_buf());
-        assert!(manager.install(&model, &AtomicBool::new(false), &|_| {}).is_err());
+        assert!(manager
+            .install(&model, &AtomicBool::new(false), &|_| {})
+            .is_err());
         assert!(!manager.is_installed(&model.id));
-        assert_eq!(manager.partial_bytes(&model), 0, "a bad archive is not kept for resuming");
+        assert_eq!(
+            manager.partial_bytes(&model),
+            0,
+            "a bad archive is not kept for resuming"
+        );
     }
 }

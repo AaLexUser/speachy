@@ -17,7 +17,9 @@ pub fn create_main(app: &AppHandle, visible: bool) -> tauri::Result<WebviewWindo
         .min_inner_size(760.0, 520.0)
         .visible(visible);
     #[cfg(target_os = "macos")]
-    let builder = builder.title_bar_style(tauri::TitleBarStyle::Overlay).hidden_title(true);
+    let builder = builder
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .hidden_title(true);
     builder.build()
 }
 
@@ -71,7 +73,9 @@ pub fn create_overlay(app: &AppHandle) -> tauri::Result<WebviewWindow> {
 
 /// Shows the pill at the bottom centre of the screen the main display is on.
 pub fn show_overlay(app: &AppHandle) {
-    let Some(window) = app.get_webview_window(OVERLAY) else { return };
+    let Some(window) = app.get_webview_window(OVERLAY) else {
+        return;
+    };
     if let Ok(Some(monitor)) = window.primary_monitor() {
         let scale = monitor.scale_factor();
         let size = monitor.size().to_logical::<f64>(scale);

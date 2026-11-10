@@ -12,6 +12,7 @@
 pub mod audio;
 pub mod catalog;
 pub mod engine;
+pub mod english;
 pub mod lang;
 pub mod models;
 pub mod numbers;

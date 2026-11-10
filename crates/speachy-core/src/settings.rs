@@ -133,6 +133,7 @@ impl Settings {
 }
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
 
@@ -144,17 +145,33 @@ mod tests {
 
         let mut settings = Settings::default();
         settings.speed = 1.4;
-        settings.default_voice = Some(VoiceRef { model_id: "supertonic-3".into(), voice_id: "M2".into() });
-        settings.language_voices.insert("ru".into(), VoiceRef { model_id: "supertonic-3".into(), voice_id: "F3".into() });
+        settings.default_voice = Some(VoiceRef {
+            model_id: "supertonic-3".into(),
+            voice_id: "M2".into(),
+        });
+        settings.language_voices.insert(
+            "ru".into(),
+            VoiceRef {
+                model_id: "supertonic-3".into(),
+                voice_id: "F3".into(),
+            },
+        );
         settings.save(&path).unwrap();
         assert_eq!(Settings::load(&path), settings);
 
         // Unknown and missing fields are fine; bad values are clamped.
-        std::fs::write(&path, r#"{"speed": 99, "future_field": true, "shortcuts": {"stop": "F9"}}"#).unwrap();
+        std::fs::write(
+            &path,
+            r#"{"speed": 99, "future_field": true, "shortcuts": {"stop": "F9"}}"#,
+        )
+        .unwrap();
         let loaded = Settings::load(&path);
         assert_eq!(loaded.speed, 2.5);
         assert_eq!(loaded.shortcuts.stop, "F9");
-        assert_eq!(loaded.shortcuts.speak_selection, Shortcuts::default().speak_selection);
+        assert_eq!(
+            loaded.shortcuts.speak_selection,
+            Shortcuts::default().speak_selection
+        );
 
         std::fs::write(&path, "{ not json").unwrap();
         assert_eq!(Settings::load(&path), Settings::default());

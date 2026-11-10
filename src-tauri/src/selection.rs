@@ -33,8 +33,9 @@ pub fn request_accessibility() -> bool {
 #[cfg(target_os = "macos")]
 mod platform {
     use accessibility_sys::{
-        kAXErrorSuccess, kAXFocusedUIElementAttribute, kAXSelectedTextAttribute, kAXTrustedCheckOptionPrompt,
-        AXIsProcessTrustedWithOptions, AXUIElementCopyAttributeValue, AXUIElementCreateSystemWide, AXUIElementRef,
+        kAXErrorSuccess, kAXFocusedUIElementAttribute, kAXSelectedTextAttribute,
+        kAXTrustedCheckOptionPrompt, AXIsProcessTrustedWithOptions, AXUIElementCopyAttributeValue,
+        AXUIElementCreateSystemWide, AXUIElementRef,
     };
     use core_foundation::base::{CFGetTypeID, CFRelease, CFTypeRef, TCFType};
     use core_foundation::boolean::CFBoolean;
@@ -44,7 +45,10 @@ mod platform {
     use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
     use objc2::rc::Retained;
     use objc2::runtime::ProtocolObject;
-    use objc2_app_kit::{NSPasteboard, NSPasteboardItem, NSPasteboardType, NSPasteboardTypeString, NSPasteboardWriting};
+    use objc2_app_kit::{
+        NSPasteboard, NSPasteboardItem, NSPasteboardType, NSPasteboardTypeString,
+        NSPasteboardWriting,
+    };
     use objc2_foundation::{NSArray, NSData};
     use std::ptr;
     use std::time::{Duration, Instant};
@@ -62,7 +66,11 @@ mod platform {
     pub fn accessibility_granted(prompt: bool) -> bool {
         unsafe {
             let key = CFString::wrap_under_get_rule(kAXTrustedCheckOptionPrompt);
-            let value = if prompt { CFBoolean::true_value() } else { CFBoolean::false_value() };
+            let value = if prompt {
+                CFBoolean::true_value()
+            } else {
+                CFBoolean::false_value()
+            };
             let options = CFDictionary::from_CFType_pairs(&[(key.as_CFType(), value.as_CFType())]);
             AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef())
         }
@@ -84,14 +92,22 @@ mod platform {
             }
             let mut focused: CFTypeRef = ptr::null();
             let attribute = CFString::from_static_string(kAXFocusedUIElementAttribute);
-            let status = AXUIElementCopyAttributeValue(system, attribute.as_concrete_TypeRef(), &mut focused);
+            let status = AXUIElementCopyAttributeValue(
+                system,
+                attribute.as_concrete_TypeRef(),
+                &mut focused,
+            );
             CFRelease(system as CFTypeRef);
             if status != kAXErrorSuccess || focused.is_null() {
                 return None;
             }
             let mut value: CFTypeRef = ptr::null();
             let attribute = CFString::from_static_string(kAXSelectedTextAttribute);
-            let status = AXUIElementCopyAttributeValue(focused as AXUIElementRef, attribute.as_concrete_TypeRef(), &mut value);
+            let status = AXUIElementCopyAttributeValue(
+                focused as AXUIElementRef,
+                attribute.as_concrete_TypeRef(),
+                &mut value,
+            );
             CFRelease(focused);
             if status != kAXErrorSuccess || value.is_null() {
                 return None;
@@ -109,7 +125,9 @@ mod platform {
 
     /// Everything on the pasteboard, so it can be put back.
     fn save_pasteboard(pasteboard: &NSPasteboard) -> Vec<SavedItem> {
-        let Some(items) = pasteboard.pasteboardItems() else { return Vec::new() };
+        let Some(items) = pasteboard.pasteboardItems() else {
+            return Vec::new();
+        };
         items
             .iter()
             .map(|item| {
@@ -140,9 +158,13 @@ mod platform {
     }
 
     fn post_copy() -> bool {
-        let Ok(source) = CGEventSource::new(CGEventSourceStateID::Private) else { return false };
+        let Ok(source) = CGEventSource::new(CGEventSourceStateID::Private) else {
+            return false;
+        };
         for key_down in [true, false] {
-            let Ok(event) = CGEvent::new_keyboard_event(source.clone(), KEY_C, key_down) else { return false };
+            let Ok(event) = CGEvent::new_keyboard_event(source.clone(), KEY_C, key_down) else {
+                return false;
+            };
             // Exactly Command, whatever modifiers are physically held.
             event.set_flags(CGEventFlags::CGEventFlagCommand);
             event.post(CGEventTapLocation::HID);
@@ -183,7 +205,9 @@ mod platform {
             if pasteboard.changeCount() != before {
                 // Give the app a moment to finish writing all its types.
                 std::thread::sleep(Duration::from_millis(20));
-                copied = pasteboard.stringForType(unsafe { NSPasteboardTypeString }).map(|s| s.to_string());
+                copied = pasteboard
+                    .stringForType(unsafe { NSPasteboardTypeString })
+                    .map(|s| s.to_string());
                 break;
             }
         }
@@ -208,7 +232,9 @@ mod platform {
         {
             // X11 keeps the current selection in the PRIMARY buffer.
             use arboard::{GetExtLinux, LinuxClipboardKind};
-            let primary = arboard::Clipboard::new().ok().and_then(|mut c| c.get().clipboard(LinuxClipboardKind::Primary).text().ok());
+            let primary = arboard::Clipboard::new()
+                .ok()
+                .and_then(|mut c| c.get().clipboard(LinuxClipboardKind::Primary).text().ok());
             if let Some(text) = primary.filter(|t| !t.trim().is_empty()) {
                 return Some(text);
             }

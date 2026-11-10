@@ -22,7 +22,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 fn main() -> Result<()> {
-    let mut models_dir = std::env::var_os("SPEACHY_MODELS").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("models"));
+    let mut models_dir = std::env::var_os("SPEACHY_MODELS")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("models"));
     let mut settings = Settings::default();
     let (mut model_id, mut voice_id, mut out, mut install) = (None, None, None, None);
     // With --out: consume audio at playback pace instead of instantly, to
@@ -51,8 +53,22 @@ fn main() -> Result<()> {
             }
             "--list" => {
                 for m in catalog::catalog() {
-                    println!("{:<20} {:>4} MB  {}  [{}]", m.id, m.size_bytes / 1_000_000, m.name, m.languages.join(","));
-                    println!("{:<20} voices: {}", "", m.voices.iter().map(|v| v.id.as_str()).collect::<Vec<_>>().join(" "));
+                    println!(
+                        "{:<20} {:>4} MB  {}  [{}]",
+                        m.id,
+                        m.size_bytes / 1_000_000,
+                        m.name,
+                        m.languages.join(",")
+                    );
+                    println!(
+                        "{:<20} voices: {}",
+                        "",
+                        m.voices
+                            .iter()
+                            .map(|v| v.id.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    );
                 }
                 return Ok(());
             }
@@ -67,14 +83,23 @@ fn main() -> Result<()> {
     let manager = ModelManager::new(models_dir.clone());
 
     if let Some(id) = install {
-        let model = catalog::find(&id).with_context(|| format!("unknown model {id}; try --list"))?;
+        let model =
+            catalog::find(&id).with_context(|| format!("unknown model {id}; try --list"))?;
         let last = Mutex::new(Instant::now() - Duration::from_secs(1));
         manager.install(model, &AtomicBool::new(false), &|p| {
             let mut last = last.lock().unwrap();
             if last.elapsed() > Duration::from_millis(500) || p.done_bytes == p.total_bytes {
                 *last = Instant::now();
-                let verb = if p.phase == Phase::Downloading { "downloading" } else { "extracting" };
-                eprintln!("{verb} {:>4} / {} MB", p.done_bytes / 1_000_000, p.total_bytes / 1_000_000);
+                let verb = if p.phase == Phase::Downloading {
+                    "downloading"
+                } else {
+                    "extracting"
+                };
+                eprintln!(
+                    "{verb} {:>4} / {} MB",
+                    p.done_bytes / 1_000_000,
+                    p.total_bytes / 1_000_000
+                );
             }
         })?;
         eprintln!("installed {id} in {}", manager.model_dir(&id).display());
@@ -89,27 +114,44 @@ fn main() -> Result<()> {
     }
     let installed = manager.installed();
     if installed.is_empty() {
-        bail!("no model installed in {}; run with --install supertonic-3", models_dir.display());
+        bail!(
+            "no model installed in {}; run with --install supertonic-3",
+            models_dir.display()
+        );
     }
     if model_id.is_some() || voice_id.is_some() {
         let model = match &model_id {
-            Some(id) => *installed.iter().find(|m| &m.id == id).with_context(|| format!("model {id} is not installed"))?,
+            Some(id) => *installed
+                .iter()
+                .find(|m| &m.id == id)
+                .with_context(|| format!("model {id} is not installed"))?,
             None => installed[0],
         };
         let voice = match &voice_id {
-            Some(id) => model.voice(id).with_context(|| format!("{} has no voice {id}", model.id))?,
+            Some(id) => model
+                .voice(id)
+                .with_context(|| format!("{} has no voice {id}", model.id))?,
             None => model.default_voice(),
         };
-        settings.default_voice = Some(VoiceRef { model_id: model.id.clone(), voice_id: voice.id.clone() });
+        settings.default_voice = Some(VoiceRef {
+            model_id: model.id.clone(),
+            voice_id: voice.id.clone(),
+        });
     }
     let chunks = plan::plan(&text, &settings, &installed)?;
 
-    let capture = out.as_ref().map(|_| CaptureAudio::new(if realtime { 1.0 } else { f32::INFINITY }));
+    let capture = out
+        .as_ref()
+        .map(|_| CaptureAudio::new(if realtime { 1.0 } else { f32::INFINITY }));
     let backend: Arc<dyn AudioBackend> = match &capture {
         Some(capture) => Arc::new(capture.clone()),
         None => Arc::new(SystemAudio),
     };
-    let engines = Arc::new(EngineCache::new(models_dir, settings.effective_threads(), 2));
+    let engines = Arc::new(EngineCache::new(
+        models_dir,
+        settings.effective_threads(),
+        2,
+    ));
     let started = Instant::now();
     let failure = Arc::new(Mutex::new(None));
     let failed = failure.clone();
@@ -118,16 +160,31 @@ fn main() -> Result<()> {
         match event {
             SpeechEvent::Started { chunks, .. } => {
                 for (i, c) in chunks.iter().enumerate() {
-                    eprintln!("[{t:6.2}s] plan {i}: [{} {} {}] {:?}", c.lang, c.model_id, c.voice_id, c.text);
+                    eprintln!(
+                        "[{t:6.2}s] plan {i}: [{} {} {}] {:?}",
+                        c.lang, c.model_id, c.voice_id, c.text
+                    );
                 }
             }
             SpeechEvent::State { state } => eprintln!("[{t:6.2}s] state: {state:?}"),
-            SpeechEvent::ChunkReady { index, audio_secs, synth_secs, .. } => {
+            SpeechEvent::ChunkReady {
+                index,
+                audio_secs,
+                synth_secs,
+                ..
+            } => {
                 eprintln!("[{t:6.2}s] chunk {index} ready: {audio_secs:.2}s of audio in {synth_secs:.2}s (rtf {:.2})", synth_secs / audio_secs)
             }
-            SpeechEvent::ChunkPlaying { index, .. } => eprintln!("[{t:6.2}s] chunk {index} playing"),
-            SpeechEvent::Finished { outcome, message, .. } => {
-                eprintln!("[{t:6.2}s] finished: {outcome:?} {}", message.clone().unwrap_or_default());
+            SpeechEvent::ChunkPlaying { index, .. } => {
+                eprintln!("[{t:6.2}s] chunk {index} playing")
+            }
+            SpeechEvent::Finished {
+                outcome, message, ..
+            } => {
+                eprintln!(
+                    "[{t:6.2}s] finished: {outcome:?} {}",
+                    message.clone().unwrap_or_default()
+                );
                 if *outcome == Outcome::Failed {
                     *failed.lock().unwrap() = Some(message.clone().unwrap_or_default());
                 }
@@ -136,7 +193,11 @@ fn main() -> Result<()> {
     });
     speaker.speak(
         chunks,
-        SpeakOptions { speed: settings.speed, volume: settings.volume, lookahead: Duration::from_secs_f32(settings.lookahead_secs) },
+        SpeakOptions {
+            speed: settings.speed,
+            volume: settings.volume,
+            lookahead: Duration::from_secs_f32(settings.lookahead_secs),
+        },
     );
     speaker.wait_idle();
     if let Some(message) = failure.lock().unwrap().take() {
@@ -145,7 +206,12 @@ fn main() -> Result<()> {
     if let (Some(path), Some(capture)) = (out, capture) {
         let audio = capture.take();
         wav::write(&path, &audio)?;
-        eprintln!("wrote {} ({:.2}s at {} Hz)", path.display(), audio.seconds(), audio.sample_rate);
+        eprintln!(
+            "wrote {} ({:.2}s at {} Hz)",
+            path.display(),
+            audio.seconds(),
+            audio.sample_rate
+        );
     }
     Ok(())
 }

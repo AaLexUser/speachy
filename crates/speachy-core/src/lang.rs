@@ -60,29 +60,173 @@ const LANGS: &[(&str, Lang)] = &[
 /// Very common words of each Latin-script language. Shared words (such as
 /// "de") are fine: they simply do not separate the languages that share them.
 const WORDS: &[(&str, &[&str])] = &[
-    ("en", &["the", "and", "of", "to", "is", "are", "was", "that", "this", "with", "for", "it", "you", "not", "have", "from", "at", "be", "we", "can", "will", "your", "over", "through", "what", "how"]),
-    ("es", &["el", "la", "los", "las", "de", "que", "y", "en", "un", "una", "es", "por", "con", "para", "no", "se", "del", "al", "lo", "como", "pero", "más", "esta", "este", "muy", "hola"]),
-    ("fr", &["le", "la", "les", "de", "des", "et", "un", "une", "est", "que", "qui", "dans", "pour", "pas", "sur", "ce", "ceci", "il", "elle", "nous", "vous", "avec", "au", "du", "je", "bonjour", "merci", "très"]),
-    ("de", &["der", "die", "das", "und", "ist", "nicht", "ein", "eine", "ich", "sie", "mit", "auf", "für", "den", "dem", "zu", "von", "es", "auch", "wir", "sich", "dies", "wie", "aber", "oder", "heute"]),
-    ("it", &["il", "la", "di", "che", "e", "è", "un", "una", "per", "non", "sono", "con", "del", "della", "gli", "le", "si", "come", "questo", "questa", "anche", "più", "ma", "ciao", "molto"]),
-    ("pt", &["o", "a", "os", "as", "de", "que", "e", "é", "um", "uma", "para", "não", "com", "em", "do", "da", "se", "por", "mais", "como", "mas", "isso", "você", "muito", "olá", "está"]),
-    ("nl", &["de", "het", "een", "en", "van", "is", "dat", "niet", "ik", "je", "op", "te", "voor", "met", "zijn", "er", "maar", "ook", "dit", "naar", "deze", "wij", "hallo", "wat", "hoe"]),
-    ("pl", &["i", "w", "nie", "na", "to", "jest", "się", "że", "z", "do", "jak", "co", "ale", "po", "tak", "dla", "czy", "ten", "być", "są", "bardzo", "cześć", "oraz", "przez"]),
-    ("cs", &["a", "je", "se", "na", "že", "to", "v", "s", "z", "do", "ale", "jako", "pro", "by", "jsem", "jsou", "tak", "co", "když", "nebo", "ahoj", "velmi", "který"]),
-    ("sk", &["a", "je", "sa", "na", "že", "to", "v", "s", "z", "do", "ale", "ako", "pre", "by", "som", "sú", "tak", "čo", "keď", "alebo", "ahoj", "veľmi", "ktorý"]),
-    ("sl", &["in", "je", "se", "na", "da", "v", "za", "z", "ne", "so", "ki", "pa", "kot", "ali", "tudi", "sem", "bil", "kaj", "zelo", "živjo", "lahko"]),
-    ("hr", &["i", "je", "se", "na", "da", "u", "za", "s", "ne", "su", "koji", "ali", "kao", "ili", "sam", "bio", "što", "vrlo", "bok", "može", "nije", "ovo"]),
-    ("da", &["og", "i", "det", "at", "en", "den", "til", "er", "som", "på", "de", "med", "han", "af", "for", "ikke", "der", "jeg", "et", "har", "hej", "meget", "hvad"]),
-    ("sv", &["och", "i", "det", "att", "en", "som", "är", "på", "av", "för", "med", "inte", "den", "har", "jag", "ett", "om", "men", "var", "hej", "mycket", "vad", "till"]),
-    ("fi", &["ja", "on", "ei", "se", "että", "oli", "hän", "mutta", "kun", "niin", "ovat", "tämä", "olen", "myös", "tai", "joka", "kuin", "hei", "hyvin", "mitä", "sekä"]),
-    ("et", &["ja", "on", "ei", "et", "see", "oli", "ta", "kui", "aga", "ka", "mis", "või", "ning", "oma", "selle", "olen", "tere", "väga", "kes", "siis"]),
-    ("hu", &["a", "az", "és", "hogy", "nem", "is", "egy", "van", "meg", "de", "ez", "volt", "már", "csak", "mint", "vagy", "még", "szia", "nagyon", "mit", "itt"]),
-    ("ro", &["și", "de", "la", "în", "a", "că", "este", "un", "o", "cu", "nu", "pe", "din", "sunt", "pentru", "care", "mai", "dar", "sau", "salut", "foarte", "ce", "acest"]),
-    ("lt", &["ir", "yra", "kad", "su", "į", "iš", "bet", "kaip", "tai", "ar", "ne", "buvo", "apie", "labai", "labas", "kas", "arba", "nuo", "aš", "mes"]),
-    ("lv", &["un", "ir", "ka", "ar", "no", "uz", "bet", "kā", "tas", "vai", "ne", "bija", "par", "ļoti", "sveiki", "kas", "es", "mēs", "arī", "lai"]),
-    ("tr", &["ve", "bir", "bu", "için", "ile", "de", "da", "çok", "ama", "gibi", "daha", "ne", "var", "olarak", "ben", "sen", "değil", "merhaba", "veya", "kadar", "en", "mi"]),
-    ("id", &["dan", "yang", "di", "ini", "itu", "dengan", "untuk", "tidak", "dari", "ke", "akan", "ada", "saya", "kami", "pada", "juga", "atau", "halo", "sangat", "apa", "adalah"]),
-    ("vi", &["và", "là", "của", "có", "không", "một", "cho", "được", "này", "trong", "với", "tôi", "bạn", "đã", "những", "các", "để", "xin", "chào", "rất", "người"]),
+    (
+        "en",
+        &[
+            "the", "and", "of", "to", "is", "are", "was", "that", "this", "with", "for", "it",
+            "you", "not", "have", "from", "at", "be", "we", "can", "will", "your", "over",
+            "through", "what", "how",
+        ],
+    ),
+    (
+        "es",
+        &[
+            "el", "la", "los", "las", "de", "que", "y", "en", "un", "una", "es", "por", "con",
+            "para", "no", "se", "del", "al", "lo", "como", "pero", "más", "esta", "este", "muy",
+            "hola",
+        ],
+    ),
+    (
+        "fr",
+        &[
+            "le", "la", "les", "de", "des", "et", "un", "une", "est", "que", "qui", "dans", "pour",
+            "pas", "sur", "ce", "ceci", "il", "elle", "nous", "vous", "avec", "au", "du", "je",
+            "bonjour", "merci", "très",
+        ],
+    ),
+    (
+        "de",
+        &[
+            "der", "die", "das", "und", "ist", "nicht", "ein", "eine", "ich", "sie", "mit", "auf",
+            "für", "den", "dem", "zu", "von", "es", "auch", "wir", "sich", "dies", "wie", "aber",
+            "oder", "heute",
+        ],
+    ),
+    (
+        "it",
+        &[
+            "il", "la", "di", "che", "e", "è", "un", "una", "per", "non", "sono", "con", "del",
+            "della", "gli", "le", "si", "come", "questo", "questa", "anche", "più", "ma", "ciao",
+            "molto",
+        ],
+    ),
+    (
+        "pt",
+        &[
+            "o", "a", "os", "as", "de", "que", "e", "é", "um", "uma", "para", "não", "com", "em",
+            "do", "da", "se", "por", "mais", "como", "mas", "isso", "você", "muito", "olá", "está",
+        ],
+    ),
+    (
+        "nl",
+        &[
+            "de", "het", "een", "en", "van", "is", "dat", "niet", "ik", "je", "op", "te", "voor",
+            "met", "zijn", "er", "maar", "ook", "dit", "naar", "deze", "wij", "hallo", "wat",
+            "hoe",
+        ],
+    ),
+    (
+        "pl",
+        &[
+            "i", "w", "nie", "na", "to", "jest", "się", "że", "z", "do", "jak", "co", "ale", "po",
+            "tak", "dla", "czy", "ten", "być", "są", "bardzo", "cześć", "oraz", "przez",
+        ],
+    ),
+    (
+        "cs",
+        &[
+            "a", "je", "se", "na", "že", "to", "v", "s", "z", "do", "ale", "jako", "pro", "by",
+            "jsem", "jsou", "tak", "co", "když", "nebo", "ahoj", "velmi", "který",
+        ],
+    ),
+    (
+        "sk",
+        &[
+            "a", "je", "sa", "na", "že", "to", "v", "s", "z", "do", "ale", "ako", "pre", "by",
+            "som", "sú", "tak", "čo", "keď", "alebo", "ahoj", "veľmi", "ktorý",
+        ],
+    ),
+    (
+        "sl",
+        &[
+            "in", "je", "se", "na", "da", "v", "za", "z", "ne", "so", "ki", "pa", "kot", "ali",
+            "tudi", "sem", "bil", "kaj", "zelo", "živjo", "lahko",
+        ],
+    ),
+    (
+        "hr",
+        &[
+            "i", "je", "se", "na", "da", "u", "za", "s", "ne", "su", "koji", "ali", "kao", "ili",
+            "sam", "bio", "što", "vrlo", "bok", "može", "nije", "ovo",
+        ],
+    ),
+    (
+        "da",
+        &[
+            "og", "i", "det", "at", "en", "den", "til", "er", "som", "på", "de", "med", "han",
+            "af", "for", "ikke", "der", "jeg", "et", "har", "hej", "meget", "hvad",
+        ],
+    ),
+    (
+        "sv",
+        &[
+            "och", "i", "det", "att", "en", "som", "är", "på", "av", "för", "med", "inte", "den",
+            "har", "jag", "ett", "om", "men", "var", "hej", "mycket", "vad", "till",
+        ],
+    ),
+    (
+        "fi",
+        &[
+            "ja", "on", "ei", "se", "että", "oli", "hän", "mutta", "kun", "niin", "ovat", "tämä",
+            "olen", "myös", "tai", "joka", "kuin", "hei", "hyvin", "mitä", "sekä",
+        ],
+    ),
+    (
+        "et",
+        &[
+            "ja", "on", "ei", "et", "see", "oli", "ta", "kui", "aga", "ka", "mis", "või", "ning",
+            "oma", "selle", "olen", "tere", "väga", "kes", "siis",
+        ],
+    ),
+    (
+        "hu",
+        &[
+            "a", "az", "és", "hogy", "nem", "is", "egy", "van", "meg", "de", "ez", "volt", "már",
+            "csak", "mint", "vagy", "még", "szia", "nagyon", "mit", "itt",
+        ],
+    ),
+    (
+        "ro",
+        &[
+            "și", "de", "la", "în", "a", "că", "este", "un", "o", "cu", "nu", "pe", "din", "sunt",
+            "pentru", "care", "mai", "dar", "sau", "salut", "foarte", "ce", "acest",
+        ],
+    ),
+    (
+        "lt",
+        &[
+            "ir", "yra", "kad", "su", "į", "iš", "bet", "kaip", "tai", "ar", "ne", "buvo", "apie",
+            "labai", "labas", "kas", "arba", "nuo", "aš", "mes",
+        ],
+    ),
+    (
+        "lv",
+        &[
+            "un", "ir", "ka", "ar", "no", "uz", "bet", "kā", "tas", "vai", "ne", "bija", "par",
+            "ļoti", "sveiki", "kas", "es", "mēs", "arī", "lai",
+        ],
+    ),
+    (
+        "tr",
+        &[
+            "ve", "bir", "bu", "için", "ile", "de", "da", "çok", "ama", "gibi", "daha", "ne",
+            "var", "olarak", "ben", "sen", "değil", "merhaba", "veya", "kadar", "en", "mi",
+        ],
+    ),
+    (
+        "id",
+        &[
+            "dan", "yang", "di", "ini", "itu", "dengan", "untuk", "tidak", "dari", "ke", "akan",
+            "ada", "saya", "kami", "pada", "juga", "atau", "halo", "sangat", "apa", "adalah",
+        ],
+    ),
+    (
+        "vi",
+        &[
+            "và", "là", "của", "có", "không", "một", "cho", "được", "này", "trong", "với", "tôi",
+            "bạn", "đã", "những", "các", "để", "xin", "chào", "rất", "người",
+        ],
+    ),
 ];
 
 /// Letters that occur in essentially one of the supported languages.
@@ -106,7 +250,10 @@ const LETTERS: &[(&str, &str)] = &[
 ];
 
 fn code_of(lang: Lang) -> Option<&'static str> {
-    LANGS.iter().find(|(_, l)| *l == lang).map(|(code, _)| *code)
+    LANGS
+        .iter()
+        .find(|(_, l)| *l == lang)
+        .map(|(code, _)| *code)
 }
 
 fn whatlang_of(code: &str) -> Option<Lang> {
@@ -147,11 +294,19 @@ fn scripts(text: &str) -> Scripts {
 /// (ISO 639-1 codes of languages a voice exists for).
 pub fn detect(text: &str, candidates: &[String]) -> Option<Detected> {
     let has = |code: &str| candidates.iter().any(|c| c == code);
-    let sure = |code: &'static str| has(code).then_some(Detected { code, reliable: true });
+    let sure = |code: &'static str| {
+        has(code).then_some(Detected {
+            code,
+            reliable: true,
+        })
+    };
     let s = scripts(text);
     // CJK characters carry more per character than letters do.
     let cjk = (s.han + s.kana + s.hangul) * 2;
-    let top = [s.latin, s.cyrillic, cjk, s.arabic, s.devanagari, s.greek].into_iter().max().unwrap_or(0);
+    let top = [s.latin, s.cyrillic, cjk, s.arabic, s.devanagari, s.greek]
+        .into_iter()
+        .max()
+        .unwrap_or(0);
     if top == 0 {
         return None;
     }
@@ -180,10 +335,21 @@ pub fn detect(text: &str, candidates: &[String]) -> Option<Detected> {
 }
 
 fn detect_cyrillic(text: &str, candidates: &[String]) -> Option<Detected> {
-    let options: Vec<&'static str> = ["ru", "uk", "bg"].into_iter().filter(|c| candidates.iter().any(|x| x == c)).collect();
-    let pick = |code: &str, reliable: bool| options.iter().find(|c| **c == code).map(|&code| Detected { code, reliable });
+    let options: Vec<&'static str> = ["ru", "uk", "bg"]
+        .into_iter()
+        .filter(|c| candidates.iter().any(|x| x == c))
+        .collect();
+    let pick = |code: &str, reliable: bool| {
+        options
+            .iter()
+            .find(|c| **c == code)
+            .map(|&code| Detected { code, reliable })
+    };
     if let [only] = options.as_slice() {
-        return Some(Detected { code: only, reliable: true });
+        return Some(Detected {
+            code: only,
+            reliable: true,
+        });
     }
     let lower = text.to_lowercase();
     if lower.contains(['і', 'ї', 'є', 'ґ']) {
@@ -202,33 +368,61 @@ fn detect_cyrillic(text: &str, candidates: &[String]) -> Option<Detected> {
     // Bulgarian has no letter of its own; require the model to be confident
     // before preferring it over Russian.
     if code == "bg" && guess.confidence() < 0.5 {
-        return pick("ru", false).or(Some(Detected { code, reliable: false }));
+        return pick("ru", false).or(Some(Detected {
+            code,
+            reliable: false,
+        }));
     }
-    Some(Detected { code, reliable: guess.is_reliable() || guess.confidence() >= 0.5 })
+    Some(Detected {
+        code,
+        reliable: guess.is_reliable() || guess.confidence() >= 0.5,
+    })
 }
 
 fn detect_latin(text: &str, candidates: &[String]) -> Option<Detected> {
-    let options: Vec<&'static str> = WORDS.iter().map(|(code, _)| *code).filter(|c| candidates.iter().any(|x| x == c)).collect();
+    let options: Vec<&'static str> = WORDS
+        .iter()
+        .map(|(code, _)| *code)
+        .filter(|c| candidates.iter().any(|x| x == c))
+        .collect();
     match options.as_slice() {
         [] => return None,
-        [only] => return Some(Detected { code: only, reliable: true }),
+        [only] => {
+            return Some(Detected {
+                code: only,
+                reliable: true,
+            })
+        }
         _ => {}
     }
     let lower = text.to_lowercase();
-    let words: Vec<&str> = lower.split(|c: char| !c.is_alphabetic() && c != '\'').filter(|w| !w.is_empty()).collect();
+    let words: Vec<&str> = lower
+        .split(|c: char| !c.is_alphabetic() && c != '\'')
+        .filter(|w| !w.is_empty())
+        .collect();
 
     // Votes from function words and distinctive letters.
     let mut scores: Vec<(&'static str, usize)> = options
         .iter()
         .map(|&code| {
-            let list = WORDS.iter().find(|(c, _)| *c == code).map_or(&[][..], |(_, l)| *l);
+            let list = WORDS
+                .iter()
+                .find(|(c, _)| *c == code)
+                .map_or(&[][..], |(_, l)| *l);
             let word_hits = words.iter().filter(|w| list.contains(w)).count();
-            let letters = LETTERS.iter().find(|(c, _)| *c == code).map_or("", |(_, l)| *l);
-            let letter_hits = lower.chars().filter(|c| letters.contains(*c)).count().min(3);
+            let letters = LETTERS
+                .iter()
+                .find(|(c, _)| *c == code)
+                .map_or("", |(_, l)| *l);
+            let letter_hits = lower
+                .chars()
+                .filter(|c| letters.contains(*c))
+                .count()
+                .min(3);
             (code, word_hits + letter_hits * 2)
         })
         .collect();
-    scores.sort_by(|a, b| b.1.cmp(&a.1));
+    scores.sort_by_key(|score| std::cmp::Reverse(score.1));
     let (best, best_score) = scores[0];
     let runner_up = scores[1].1;
 
@@ -241,18 +435,30 @@ fn detect_latin(text: &str, candidates: &[String]) -> Option<Detected> {
     // when the word evidence does not clearly say otherwise.
     if let (Some(code), Some(g)) = (guess_code, &guess) {
         if g.is_reliable() && (best == code || best_score < runner_up + 3) {
-            return Some(Detected { code, reliable: true });
+            return Some(Detected {
+                code,
+                reliable: true,
+            });
         }
     }
     if best_score >= 2 && best_score > runner_up {
         let agreed = guess_code == Some(best);
-        return Some(Detected { code: best, reliable: best_score >= runner_up + 2 || agreed });
+        return Some(Detected {
+            code: best,
+            reliable: best_score >= runner_up + 2 || agreed,
+        });
     }
     if best_score >= 1 && guess_code == Some(best) {
-        return Some(Detected { code: best, reliable: best_score > runner_up });
+        return Some(Detected {
+            code: best,
+            reliable: best_score > runner_up,
+        });
     }
     match guess_code {
-        Some(code) if guess_conf >= 0.6 => Some(Detected { code, reliable: false }),
+        Some(code) if guess_conf >= 0.6 => Some(Detected {
+            code,
+            reliable: false,
+        }),
         _ => None,
     }
 }
@@ -317,15 +523,29 @@ mod tests {
     #[test]
     fn only_answers_with_a_candidate() {
         let candidates = vec!["en".to_string(), "zh".to_string()];
-        assert_eq!(detect("Dies ist ein Test der Sprachsynthese.", &candidates).unwrap().code, "en");
+        assert_eq!(
+            detect("Dies ist ein Test der Sprachsynthese.", &candidates)
+                .unwrap()
+                .code,
+            "en"
+        );
         assert!(detect("Привет, мир", &candidates).is_none());
-        assert_eq!(detect("Привет, мир", &["ru".to_string(), "en".to_string()]).unwrap().code, "ru");
+        assert_eq!(
+            detect("Привет, мир", &["ru".to_string(), "en".to_string()])
+                .unwrap()
+                .code,
+            "ru"
+        );
         assert!(detect("hello", &[]).is_none());
     }
 
     #[test]
     fn mostly_latin_text_with_a_foreign_word_stays_latin() {
-        let got = detect("The word 東京 means Tokyo, and it is the capital of the country.", &all()).unwrap();
+        let got = detect(
+            "The word 東京 means Tokyo, and it is the capital of the country.",
+            &all(),
+        )
+        .unwrap();
         assert_eq!(got.code, "en");
     }
 }

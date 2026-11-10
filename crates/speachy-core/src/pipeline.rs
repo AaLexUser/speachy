@@ -33,7 +33,11 @@ pub struct SpeakOptions {
 
 impl Default for SpeakOptions {
     fn default() -> Self {
-        Self { speed: 1.0, volume: 1.0, lookahead: Duration::from_secs(20) }
+        Self {
+            speed: 1.0,
+            volume: 1.0,
+            lookahead: Duration::from_secs(20),
+        }
     }
 }
 
@@ -61,13 +65,30 @@ pub enum Outcome {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SpeechEvent {
-    State { state: State },
-    Started { session: u64, chunks: Vec<PlannedChunk> },
+    State {
+        state: State,
+    },
+    Started {
+        session: u64,
+        chunks: Vec<PlannedChunk>,
+    },
     /// Chunk `index` has been synthesized and queued.
-    ChunkReady { session: u64, index: usize, audio_secs: f32, synth_secs: f32 },
+    ChunkReady {
+        session: u64,
+        index: usize,
+        audio_secs: f32,
+        synth_secs: f32,
+    },
     /// Chunk `index` started playing.
-    ChunkPlaying { session: u64, index: usize },
-    Finished { session: u64, outcome: Outcome, message: Option<String> },
+    ChunkPlaying {
+        session: u64,
+        index: usize,
+    },
+    Finished {
+        session: u64,
+        outcome: Outcome,
+        message: Option<String>,
+    },
 }
 
 type Listener = Box<dyn Fn(&SpeechEvent) + Send + Sync>;
@@ -78,7 +99,11 @@ enum Msg {
     Volume(f32),
     /// The worker is about to load a model.
     Loading,
-    Synth { index: usize, result: anyhow::Result<Option<Audio>>, synth_secs: f32 },
+    Synth {
+        index: usize,
+        result: anyhow::Result<Option<Audio>>,
+        synth_secs: f32,
+    },
     Play(PlayEvent),
 }
 
@@ -134,16 +159,33 @@ impl Speaker {
         let id = inner.next_session.fetch_add(1, Ordering::Relaxed);
         let cancel = Arc::new(AtomicBool::new(false));
         let (tx, rx) = channel();
-        let text = plan.iter().map(|c| c.text.as_str()).collect::<Vec<_>>().join(" ");
+        let text = plan
+            .iter()
+            .map(|c| c.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
         {
             let mut current = inner.current.lock().unwrap();
             if let Some(old) = current.take() {
                 old.cancel.store(true, Ordering::Relaxed);
                 let _ = old.tx.send(Msg::Stop);
-                (inner.listener)(&SpeechEvent::Finished { session: old.id, outcome: Outcome::Stopped, message: None });
+                (inner.listener)(&SpeechEvent::Finished {
+                    session: old.id,
+                    outcome: Outcome::Stopped,
+                    message: None,
+                });
             }
-            *current = Some(Current { id, cancel: cancel.clone(), tx: tx.clone(), text, paused: false });
-            (inner.listener)(&SpeechEvent::Started { session: id, chunks: plan.clone() });
+            *current = Some(Current {
+                id,
+                cancel: cancel.clone(),
+                tx: tx.clone(),
+                text,
+                paused: false,
+            });
+            (inner.listener)(&SpeechEvent::Started {
+                session: id,
+                chunks: plan.clone(),
+            });
             inner.set_state(State::Preparing);
         }
         let inner = inner.clone();
@@ -175,7 +217,13 @@ impl Speaker {
 
     /// Pauses if speaking, resumes if paused.
     pub fn toggle_pause(&self) {
-        let paused = self.inner.current.lock().unwrap().as_ref().map(|c| c.paused);
+        let paused = self
+            .inner
+            .current
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|c| c.paused);
         if let Some(paused) = paused {
             self.set_paused(!paused);
         }
@@ -197,7 +245,12 @@ impl Speaker {
 
     /// The text being spoken, if any.
     pub fn current_text(&self) -> Option<String> {
-        self.inner.current.lock().unwrap().as_ref().map(|c| c.text.clone())
+        self.inner
+            .current
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|c| c.text.clone())
     }
 
     /// Blocks until nothing is being spoken.
@@ -239,7 +292,11 @@ impl Inner {
         let mut current = self.current.lock().unwrap();
         if current.as_ref().is_some_and(|c| c.id == id) {
             *current = None;
-            (self.listener)(&SpeechEvent::Finished { session: id, outcome, message });
+            (self.listener)(&SpeechEvent::Finished {
+                session: id,
+                outcome,
+                message,
+            });
             self.set_state(State::Idle);
         }
     }
@@ -264,7 +321,10 @@ impl Gate {
     fn wait_below(&self, limit: f32, cancel: &AtomicBool) -> bool {
         let mut waiting = self.waiting_secs.lock().unwrap();
         while *waiting >= limit && !cancel.load(Ordering::Relaxed) {
-            (waiting, _) = self.changed.wait_timeout(waiting, Duration::from_millis(100)).unwrap();
+            (waiting, _) = self
+                .changed
+                .wait_timeout(waiting, Duration::from_millis(100))
+                .unwrap();
         }
         !cancel.load(Ordering::Relaxed)
     }
@@ -287,8 +347,15 @@ fn synthesis_worker(
             let _ = tx.send(Msg::Loading);
         }
         let started = Instant::now();
-        let request = SynthRequest { text: &chunk.text, sid: chunk.sid, speed, lang: &chunk.lang };
-        let result = engines.engine(&chunk.engine).and_then(|engine| engine.synthesize(&request, &cancel));
+        let request = SynthRequest {
+            text: &chunk.text,
+            sid: chunk.sid,
+            speed,
+            lang: &chunk.lang,
+        };
+        let result = engines
+            .engine(&chunk.engine)
+            .and_then(|engine| engine.synthesize(&request, &cancel));
         let synth_secs = started.elapsed().as_secs_f32();
         if cancel.load(Ordering::Relaxed) {
             return;
@@ -298,7 +365,14 @@ fn synthesis_worker(
         if let Ok(Some(audio)) = &result {
             gate.add(audio.seconds());
         }
-        if tx.send(Msg::Synth { index, result, synth_secs }).is_err() {
+        if tx
+            .send(Msg::Synth {
+                index,
+                result,
+                synth_secs,
+            })
+            .is_err()
+        {
             return;
         }
     }
@@ -319,7 +393,13 @@ fn run_session(
     let speed = opts.speed.clamp(0.25, 4.0);
 
     {
-        let (engines, plan, gate, cancel, tx) = (inner.engines.clone(), plan.clone(), gate.clone(), cancel.clone(), tx.clone());
+        let (engines, plan, gate, cancel, tx) = (
+            inner.engines.clone(),
+            plan.clone(),
+            gate.clone(),
+            cancel.clone(),
+            tx.clone(),
+        );
         let lookahead = opts.lookahead.as_secs_f32();
         std::thread::Builder::new()
             .name("speachy-synth".into())
@@ -354,7 +434,9 @@ fn run_session(
         if done == total {
             break Outcome::Completed;
         }
-        let Ok(msg) = rx.recv() else { break Outcome::Stopped };
+        let Ok(msg) = rx.recv() else {
+            break Outcome::Stopped;
+        };
         match msg {
             Msg::Stop => break Outcome::Stopped,
             Msg::Pause(pause) => {
@@ -373,7 +455,11 @@ fn run_session(
                     inner.if_current(id, |inner| inner.set_state(State::Loading));
                 }
             }
-            Msg::Synth { index, result, synth_secs } => {
+            Msg::Synth {
+                index,
+                result,
+                synth_secs,
+            } => {
                 let raw_secs = match &result {
                     Ok(Some(audio)) => audio.seconds(),
                     _ => 0.0,
@@ -384,7 +470,10 @@ fn run_session(
                     Err(err) => {
                         log::warn!("chunk {index} failed: {err:#}");
                         failure.get_or_insert(format!("{err:#}"));
-                        Audio { samples: Vec::new(), sample_rate: 1 }
+                        Audio {
+                            samples: Vec::new(),
+                            sample_rate: 1,
+                        }
                     }
                 };
                 if audio.samples.is_empty() {
@@ -395,9 +484,20 @@ fn run_session(
                     continue;
                 }
                 if index == 0 {
-                    log::info!("first audio ready {:.0} ms after the request", started.elapsed().as_secs_f32() * 1000.0);
+                    log::info!(
+                        "first audio ready {:.0} ms after the request",
+                        started.elapsed().as_secs_f32() * 1000.0
+                    );
                 }
-                inner.emit(id, SpeechEvent::ChunkReady { session: id, index, audio_secs: audio.seconds(), synth_secs });
+                inner.emit(
+                    id,
+                    SpeechEvent::ChunkReady {
+                        session: id,
+                        index,
+                        audio_secs: audio.seconds(),
+                        synth_secs,
+                    },
+                );
                 waiting.insert(index, raw_secs);
                 let pause = pause_after(&plan[index], speed);
                 stream.push(index, audio, pause);
@@ -433,7 +533,9 @@ fn run_session(
     drop(stream);
     match (outcome, failure) {
         // Every chunk failed, or the text ended without any audio.
-        (Outcome::Completed, Some(message)) if !ever_played => inner.finish(id, Outcome::Failed, Some(message)),
+        (Outcome::Completed, Some(message)) if !ever_played => {
+            inner.finish(id, Outcome::Failed, Some(message))
+        }
         (outcome, _) => inner.finish(id, outcome, None),
     }
 }
@@ -442,7 +544,11 @@ fn run_session(
 fn pause_after(chunk: &PlannedChunk, speed: f32) -> Duration {
     let millis = match chunk.boundary {
         Boundary::Clause => {
-            let ends_with_punctuation = chunk.text.chars().next_back().is_some_and(|c| !c.is_alphanumeric());
+            let ends_with_punctuation = chunk
+                .text
+                .chars()
+                .next_back()
+                .is_some_and(|c| !c.is_alphanumeric());
             if ends_with_punctuation {
                 130.0
             } else {
@@ -468,7 +574,11 @@ pub fn trim_silence(mut audio: Audio) -> Audio {
         audio.samples.clear();
         return audio;
     };
-    let last = audio.samples.iter().rposition(|s| s.abs() > threshold).unwrap_or(first);
+    let last = audio
+        .samples
+        .iter()
+        .rposition(|s| s.abs() > threshold)
+        .unwrap_or(first);
     let start = first.saturating_sub(rate * 15 / 1000);
     let end = (last + 1 + rate * 40 / 1000).min(audio.samples.len());
     audio.samples.truncate(end);

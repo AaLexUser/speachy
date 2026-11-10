@@ -3,7 +3,6 @@ name = "speachy"
 description = "Select text anywhere, press a shortcut, hear it read aloud by a local TTS model"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
 repository.workspace = true
 default-run = "speachy"
 
