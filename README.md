@@ -50,9 +50,15 @@ release into the app's data directory and carry their own licences
 
 ## Install
 
-There is no signed release yet. Either download the `Speachy-macos-arm64`
-disk image from the latest run of the **Build** workflow on GitHub, or build
-it yourself:
+Download the disk image for your Mac from the
+[Releases](https://github.com/AaLexUser/speachy/releases) page
+(`macos-arm64` for Apple Silicon, `macos-x64` for Intel), open it and drag
+Speachy to Applications. The app is not notarized by Apple, so the first
+time macOS will refuse to open it: allow it under **System Settings →
+Privacy & Security → Open Anyway**, or run
+`xattr -dr com.apple.quarantine /Applications/Speachy.app` once.
+
+To build it yourself instead:
 
 ```sh
 # Prerequisites: Rust (https://rustup.rs) and the Xcode command line tools.
@@ -179,6 +185,15 @@ cargo clippy --workspace --all-targets -- -D warnings
 The app also builds and runs on Linux (X11), where the shortcut reads the
 primary selection. Building there needs the Tauri prerequisites plus
 `libasound2-dev`, `libssl-dev` and `libxdo-dev`. Windows is untested.
+
+### Releasing
+
+Set the version in `Cargo.toml`, then push a tag `vX.Y.Z` that matches it.
+The **Release** workflow builds the app for Apple Silicon and Intel and the
+CLI for macOS and Linux, checks each build (the CLI installs a model and
+synthesizes a sentence; the app is launched), and publishes a GitHub release
+with the files and their checksums. Running the workflow by hand from the
+Actions tab does the same but leaves the release as a draft.
 
 ## Status and known limitations
 

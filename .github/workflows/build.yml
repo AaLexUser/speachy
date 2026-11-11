@@ -62,6 +62,8 @@ jobs:
         run: cargo install tauri-cli --version "^2" --locked
       - name: Build Speachy.app and the disk image
         run: cargo tauri build --bundles app,dmg
+      - name: Launch the app
+        run: scripts/smoke-app.sh target/release/bundle/macos/Speachy.app/Contents/MacOS/speachy
       - uses: actions/upload-artifact@v4
         with:
           name: Speachy-macos-arm64

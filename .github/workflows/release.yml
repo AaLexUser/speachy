@@ -1,0 +1,192 @@
+name: Release
+
+# Builds the release binaries and attaches them to a GitHub release.
+#
+# - Pushing a tag `vX.Y.Z` publishes a release for it.
+# - Running the workflow by hand takes the tag as an input and, by default,
+#   leaves the release as a draft to be reviewed and published in the
+#   GitHub interface.
+#
+# The tag must match the version in Cargo.toml.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release, e.g. v0.1.0 (must match the version in Cargo.toml)"
+        required: true
+        type: string
+      draft:
+        description: "Leave the release as a draft"
+        type: boolean
+        default: true
+      prerelease:
+        description: "Mark the release as a pre-release"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            app: true
+          # Built on Apple Silicon for Intel, and run under Rosetta to check it.
+          - name: macos-x64
+            os: macos-latest
+            target: x86_64-apple-darwin
+            app: true
+            run_prefix: arch -x86_64
+          # The command-line tool only; the desktop app is not packaged for Linux.
+          - name: linux-x64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            app: false
+    env:
+      TARGET: ${{ matrix.target }}
+      NAME: ${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check that the tag matches the version
+        shell: bash
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::tag $TAG does not match version $version in Cargo.toml"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Install system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libssl-dev pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Can this machine run the build?
+        shell: bash
+        run: |
+          prefix="${{ matrix.run_prefix }}"
+          if [ -z "$prefix" ] || $prefix /usr/bin/true 2>/dev/null; then
+            echo "RUNNABLE=true" >> "$GITHUB_ENV"
+            echo "RUN_PREFIX=$prefix" >> "$GITHUB_ENV"
+          else
+            echo "RUNNABLE=false" >> "$GITHUB_ENV"
+            echo "::warning::$NAME cannot be run on this machine; it is built but not smoke-tested"
+          fi
+
+      - name: Build the command-line tool
+        run: cargo build --release --locked -p speachy-cli --target "$TARGET"
+
+      - name: Check the command-line tool (installs a model, synthesizes speech)
+        if: env.RUNNABLE == 'true'
+        run: scripts/smoke-cli.sh "target/$TARGET/release/speachy-cli"
+
+      - name: Build Speachy.app and the disk image
+        if: matrix.app
+        run: npx --yes @tauri-apps/cli@2 build --target "$TARGET" --bundles app,dmg -- --locked
+
+      - name: Check the app bundle
+        if: matrix.app
+        shell: bash
+        run: |
+          app="target/$TARGET/release/bundle/macos/Speachy.app"
+          want=${TARGET%%-*}; [ "$want" = aarch64 ] && want=arm64
+          got=$(lipo -archs "$app/Contents/MacOS/speachy")
+          echo "architecture: $got"
+          [ "$got" = "$want" ]
+          codesign --verify --deep --strict "$app"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$app/Contents/Info.plist" | grep -qx "$VERSION"
+
+      - name: Launch the app
+        if: matrix.app && env.RUNNABLE == 'true'
+        run: scripts/smoke-app.sh "target/$TARGET/release/bundle/macos/Speachy.app/Contents/MacOS/speachy" "screenshot-$NAME.png"
+
+      - name: Collect the files to release
+        shell: bash
+        run: |
+          mkdir dist
+          tar -czf "dist/speachy-cli-$VERSION-$NAME.tar.gz" -C "target/$TARGET/release" speachy-cli
+          if [ "${{ matrix.app }}" = "true" ]; then
+            cp target/"$TARGET"/release/bundle/dmg/*.dmg "dist/Speachy-$VERSION-$NAME.dmg"
+          fi
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        if: matrix.app
+        with:
+          name: screenshot-${{ matrix.name }}
+          path: screenshot-*.png
+          if-no-files-found: ignore
+
+  release:
+    name: Publish the release
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Write checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create or update the release
+        shell: bash
+        run: |
+          version=${TAG#v}
+          sed "s/{{version}}/$version/g" .github/release-notes.md > notes.md
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+            gh release edit "$TAG" --notes-file notes.md
+            exit 0
+          fi
+          flags=()
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            [ "${{ inputs.draft }}" = "true" ] && flags+=(--draft)
+            [ "${{ inputs.prerelease }}" = "true" ] && flags+=(--prerelease)
+          else
+            # A tag such as v1.0.0-beta.1 is a pre-release.
+            [[ "$TAG" == *-* ]] && flags+=(--prerelease)
+          fi
+          gh release create "$TAG" dist/* --title "Speachy $version" --notes-file notes.md --target "$GITHUB_SHA" "${flags[@]}"
