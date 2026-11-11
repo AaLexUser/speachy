@@ -811,6 +811,29 @@ input[type="range"] {
   font-variant-numeric: tabular-nums;
 }
 
+.notes {
+  max-height: 150px;
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  overflow: auto;
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--muted);
+  font: 12.5px/1.5 -apple-system, system-ui, sans-serif;
+  white-space: pre-wrap;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+#updates-body .setting:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+#updates-body .bar {
+  margin: 0 0 12px;
+}
+
 .toast {
   position: fixed;
   left: 50%;

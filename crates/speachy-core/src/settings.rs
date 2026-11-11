@@ -58,6 +58,8 @@ pub struct Settings {
     pub launch_at_login: bool,
     /// Keep the settings window closed at launch (menu bar only).
     pub start_hidden: bool,
+    /// Look for new versions of the app from time to time.
+    pub check_for_updates: bool,
     pub shortcuts: Shortcuts,
 }
 
@@ -76,6 +78,7 @@ impl Default for Settings {
             show_overlay: true,
             launch_at_login: false,
             start_hidden: false,
+            check_for_updates: true,
             shortcuts: Shortcuts::default(),
         }
     }

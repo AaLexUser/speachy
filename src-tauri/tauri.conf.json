@@ -15,7 +15,10 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg"],
+    "targets": [
+      "app",
+      "dmg"
+    ],
     "category": "Productivity",
     "shortDescription": "Read any selected text aloud with local TTS models",
     "icon": [
@@ -28,6 +31,14 @@
     "macOS": {
       "minimumSystemVersion": "11.0",
       "signingIdentity": "-"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDBFODQ0NDhGOThCNUU1QzYKUldURzViV1lqMFNFRHJ6RWpNLzlKMlpFNU9LVlpXcCtHQzdCcEd4dXg2ODlqeWVzN081eG5GRkkK",
+      "endpoints": [
+        "https://github.com/AaLexUser/speachy/releases/latest/download/latest.json"
+      ]
     }
   }
 }

@@ -8,6 +8,7 @@ Select text anywhere, press ⌃⌥S, and hear it read aloud by a text-to-speech 
 | `Speachy-{{version}}-macos-x64.dmg` | The app, for Intel Macs |
 | `speachy-cli-{{version}}-macos-arm64.tar.gz`, `…-macos-x64.tar.gz` | The command-line tool for macOS |
 | `speachy-cli-{{version}}-linux-x64.tar.gz` | The command-line tool for Linux (x86-64, glibc 2.35 or later; needs `libasound2` and `libssl3`) |
+| `Speachy-{{version}}-macos-….app.tar.gz`, `latest.json` | Used by the app to update itself; no need to download these |
 | `SHA256SUMS.txt` | Checksums of the files above |
 
 Requires macOS 11 or later. The desktop app is not packaged for Linux or Windows; on Linux it can be built from source.
@@ -23,5 +24,9 @@ Requires macOS 11 or later. The desktop app is not packaged for Linux or Windows
 
 3. Open the **Models** tab and download a model. Supertonic 3 is a good first choice.
 4. Grant **Accessibility** access when asked (System Settings → Privacy & Security → Accessibility). Speachy needs it to read the text you have selected in other apps.
+
+## Updating
+
+Speachy looks for new versions by itself and offers them under **Settings → Updates** (also: **Check for Updates…** in the menu-bar menu). After an update macOS may ask for Accessibility access again, because the app is not signed with an Apple developer certificate: remove Speachy from the Accessibility list and add it back.
 
 The command-line tool is a single file: unpack it and run `./speachy-cli --help`. If macOS blocks it, remove the quarantine flag the same way: `xattr -d com.apple.quarantine speachy-cli`.

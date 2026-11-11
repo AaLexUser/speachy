@@ -64,6 +64,10 @@ jobs:
     env:
       TARGET: ${{ matrix.target }}
       NAME: ${{ matrix.name }}
+      # Signs the archives the in-app updater installs. Without this secret
+      # the release is still built, but apps cannot update themselves to it.
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
 
@@ -108,7 +112,15 @@ jobs:
 
       - name: Build Speachy.app and the disk image
         if: matrix.app
-        run: npx --yes @tauri-apps/cli@2 build --target "$TARGET" --bundles app,dmg -- --locked
+        shell: bash
+        run: |
+          config='{}'
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            config='{"bundle":{"createUpdaterArtifacts":true}}'
+          else
+            echo "::warning::The TAURI_SIGNING_PRIVATE_KEY secret is not set: this release will have no update archives, so installed apps cannot update themselves to it."
+          fi
+          npx --yes @tauri-apps/cli@2 build --target "$TARGET" --bundles app,dmg --config "$config" -- --locked
 
       - name: Check the app bundle
         if: matrix.app
@@ -133,6 +145,12 @@ jobs:
           tar -czf "dist/speachy-cli-$VERSION-$NAME.tar.gz" -C "target/$TARGET/release" speachy-cli
           if [ "${{ matrix.app }}" = "true" ]; then
             cp target/"$TARGET"/release/bundle/dmg/*.dmg "dist/Speachy-$VERSION-$NAME.dmg"
+            # What the in-app updater downloads, with its signature.
+            archive="target/$TARGET/release/bundle/macos/Speachy.app.tar.gz"
+            if [ -f "$archive.sig" ]; then
+              cp "$archive" "dist/Speachy-$VERSION-$NAME.app.tar.gz"
+              cp "$archive.sig" "dist/Speachy-$VERSION-$NAME.app.tar.gz.sig"
+            fi
           fi
           ls -l dist
 
@@ -164,6 +182,21 @@ jobs:
           pattern: release-*
           path: dist
           merge-multiple: true
+
+      - name: Write the update manifest
+        shell: bash
+        run: |
+          version=${TAG#v}
+          if ls dist/*.app.tar.gz.sig >/dev/null 2>&1; then
+            scripts/make-update-manifest.py --version "$version" \
+              --base-url "https://github.com/$GH_REPO/releases/download/$TAG" \
+              --notes "See https://github.com/$GH_REPO/releases/tag/$TAG for what is new." \
+              --out dist/latest.json dist
+            # The signatures are inside the manifest now.
+            rm dist/*.sig
+          else
+            echo "::warning::No signed update archives were built: installed apps will not be offered this release."
+          fi
 
       - name: Write checksums
         run: |

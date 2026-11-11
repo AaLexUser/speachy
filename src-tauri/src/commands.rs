@@ -66,6 +66,7 @@ pub fn shell_info() -> Value {
     json!({
         "platform": std::env::consts::OS,
         "accessibility": selection::accessibility_granted(),
+        "updates_supported": crate::updates::SUPPORTED,
     })
 }
 

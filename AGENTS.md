@@ -152,6 +152,20 @@ Reading the selection, global shortcuts, the menu-bar icon, the overlay pill
 and the Accessibility permission flow live in `src-tauri` and can only be
 exercised in the running app; the macOS parts only on a Mac. Keep these thin.
 
+Three scripts exercise the built app on a Mac, and run in CI on every push:
+`scripts/smoke-app.sh` (launch), `scripts/e2e-macos.sh` (another app in full
+screen, the shortcut with and without a selection, screenshots of the pill)
+and `scripts/e2e-update-macos.sh` (self-update from a local server, and
+refusal of a tampered update). Their screenshots and logs are uploaded as
+workflow artifacts; look at them before claiming a desktop change works.
+
+**Updates** (`src-tauri/src/updates.rs`) are the shell's: the app replaces
+its own bundle. The feed is `latest.json` on the newest GitHub release;
+archives are verified against `plugins.updater.pubkey`. Never commit the
+private key, and never weaken verification to make a test pass —
+`SPEACHY_UPDATE_ENDPOINT` redirects the feed for testing, but the signature
+is still checked.
+
 For interface work without a Mac, the app runs on Linux: `cargo run -p
 speachy` (under `xvfb-run` where there is no display). The window scripts in
 `ui/` can also be opened in a browser with `window.__TAURI__` stubbed, which

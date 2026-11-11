@@ -186,13 +186,33 @@ The app also builds and runs on Linux (X11), where the shortcut reads the
 primary selection. Building there needs the Tauri prerequisites plus
 `libasound2-dev`, `libssl-dev` and `libxdo-dev`. Windows is untested.
 
+### Updates
+
+The app checks GitHub for a newer release shortly after launch and every
+few hours (this can be turned off), and offers it under **Settings →
+Updates**; nothing is installed without asking. `Speachy.app/Contents/MacOS/speachy
+--update` does the same from a terminal. Only published, non-pre-release
+versions are offered.
+
+An update is an archive of the app signed with a key whose public half is
+built into the app (`plugins.updater.pubkey` in `src-tauri/tauri.conf.json`).
+The private half must be available to the Release workflow as the
+repository secret `TAURI_SIGNING_PRIVATE_KEY`; without it releases are still
+built, but installed apps cannot update to them. Keep that key safe: apps
+only accept updates signed with it, so losing it means users have to
+reinstall by hand.
+
+Because the app is not signed with an Apple developer certificate, macOS
+may ask for Accessibility access again after an update.
+
 ### Releasing
 
 Set the version in `Cargo.toml`, then push a tag `vX.Y.Z` that matches it.
 The **Release** workflow builds the app for Apple Silicon and Intel and the
 CLI for macOS and Linux, checks each build (the CLI installs a model and
 synthesizes a sentence; the app is launched), and publishes a GitHub release
-with the files and their checksums. Running the workflow by hand from the
+with the files, their checksums, and the signed update archives and
+`latest.json` that installed apps look for. Running the workflow by hand from the
 Actions tab does the same but leaves the release as a draft.
 
 ## Status and known limitations

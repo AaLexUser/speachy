@@ -5,7 +5,7 @@ use crate::{speech, windows};
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
     let item = |id: &str, text: &str| MenuItem::with_id(app, id, text, true, None::<&str>);
@@ -18,6 +18,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             &item("stop", "Stop")?,
             &PredefinedMenuItem::separator(app)?,
             &item("open", "Open Speachy…")?,
+            &item("check_updates", "Check for Updates…")?,
             &PredefinedMenuItem::separator(app)?,
             &item("quit", "Quit Speachy")?,
         ],
@@ -38,6 +39,13 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
                 "pause_resume" => shortcuts::run(&app, Action::PauseResume),
                 "stop" => shortcuts::run(&app, Action::Stop),
                 "open" => windows::show_main(&app),
+                "check_updates" => {
+                    windows::show_main(&app);
+                    let _ = app.emit("show-page", "settings");
+                    tauri::async_runtime::spawn(async move {
+                        crate::updates::check(&app, false).await;
+                    });
+                }
                 "quit" => app.exit(0),
                 _ => {}
             });

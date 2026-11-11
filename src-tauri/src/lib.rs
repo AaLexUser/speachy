@@ -11,6 +11,7 @@ mod shortcuts;
 mod speech;
 mod state;
 mod tray;
+mod updates;
 mod windows;
 
 use speachy_core::audio::SystemAudio;
@@ -23,6 +24,8 @@ use tauri::{AppHandle, Emitter, Manager, RunEvent, WindowEvent};
 
 /// Passed by the login item so the app starts in the menu bar only.
 const HIDDEN_FLAG: &str = "--hidden";
+/// Check for a newer version, install it and exit, without opening the app.
+const UPDATE_FLAG: &str = "--update";
 
 /// Forwards engine events to the windows and keeps the pill in step.
 ///
@@ -77,11 +80,19 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let hidden = settings.start_hidden || std::env::args().any(|arg| arg == HIDDEN_FLAG);
 
     app.manage(shortcuts::Bound::default());
+    app.manage(updates::Updates::default());
     app.manage(AppState {
         session: session.clone(),
         last_selection: Mutex::default(),
         notice_until: Mutex::default(),
     });
+
+    if std::env::args().any(|arg| arg == UPDATE_FLAG) {
+        #[cfg(target_os = "macos")]
+        app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+        updates::run_and_exit(&handle);
+        return Ok(());
+    }
 
     tray::create(&handle)?;
     windows::create_overlay(&handle)?;
@@ -92,17 +103,22 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     }
     shortcuts::register_all(&handle, &settings.shortcuts);
     session.preload();
+    updates::start_automatic_checks(&handle);
     Ok(())
 }
 
 pub fn run() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    let builder = tauri::Builder::default()
-        // Must be the first plugin: a second launch only raises the window.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+    let mut builder = tauri::Builder::default();
+    // A second launch only raises the window of the first. (Must be the
+    // first plugin.) `--update` is a separate, short-lived run.
+    if !std::env::args().any(|arg| arg == UPDATE_FLAG) {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             windows::show_main(app)
         }));
+    }
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     // The pill is a native panel on macOS.
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(tauri_nspanel::init());
@@ -122,6 +138,9 @@ pub fn run() {
             commands::shell_info,
             commands::set_shortcuts_suspended,
             commands::request_accessibility,
+            updates::update_status,
+            updates::check_for_updates,
+            updates::install_update,
         ])
         .setup(setup)
         .on_window_event(|window, event| {

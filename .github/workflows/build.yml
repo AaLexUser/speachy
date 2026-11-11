@@ -82,3 +82,6 @@ jobs:
           name: Speachy-macos-arm64
           path: target/release/bundle/dmg/*.dmg
           if-no-files-found: error
+      # Last, because it rebuilds the app bundle with a throwaway signing key.
+      - name: Update the app from a local update server
+        run: scripts/e2e-update-macos.sh

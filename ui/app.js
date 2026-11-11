@@ -13,6 +13,8 @@ const S = {
   /** Shortcut field being recorded, or null. */
   recording: null,
   shortcutErrors: [],
+  /** State of the app updater: { status: "idle" | "checking" | "available" | … }. */
+  update: { status: "idle" },
   draft: "Speachy reads any text you select, in any app. The first sentence starts within a moment, and the rest is prepared while you listen, so there are no pauses between sentences.",
 };
 
@@ -97,6 +99,7 @@ async function refresh() {
     invoke("shell_info"),
   ]);
   S.snap = { ...snapshot, ...shell };
+  if (shell.updates_supported) S.update = await invoke("update_status");
   S.speech.state = S.snap.speech_state;
   render();
 }
@@ -129,6 +132,14 @@ function pageHome() {
         <div><strong>Allow Accessibility access.</strong>
         <span>macOS requires it before Speachy can read the text you have selected in other apps.</span></div>
         <button data-action="grant">Open settings</button>
+      </div>`);
+  }
+  if (S.update.status === "available") {
+    banners.unshift(`
+      <div class="banner" id="update-banner">
+        <div><strong>Speachy ${esc(S.update.version)} is available.</strong>
+        <span>You have ${esc(S.snap.version)}. Updating takes a moment and restarts the app.</span></div>
+        <button class="primary" data-action="install-update">Update and restart</button>
       </div>`);
   }
   return `
@@ -313,11 +324,53 @@ function toggleRow(field, title, help) {
     </label>`;
 }
 
+/** The inside of the Updates card, redrawn as an update progresses. */
+function updatesBody() {
+  const u = S.update;
+  const auto = S.snap.settings.check_for_updates;
+  let text = "";
+  let detail = "";
+  let button = `<button data-action="check-updates">Check for updates</button>`;
+  if (u.status === "checking") {
+    text = "Checking…";
+    button = `<button disabled>Check for updates</button>`;
+  } else if (u.status === "up_to_date") {
+    text = "You have the newest version.";
+  } else if (u.status === "available") {
+    text = `Version ${esc(u.version)} is available.`;
+    if (u.notes) detail = `<pre class="notes">${esc(u.notes.trim().slice(0, 1200))}</pre>`;
+    button = `<button class="primary" data-action="install-update">Update and restart</button>`;
+  } else if (u.status === "downloading") {
+    const pct = u.total ? Math.min(100, (u.downloaded / u.total) * 100) : 0;
+    text = u.total ? `Downloading version ${esc(u.version)}… ${Math.round(pct)}%` : `Downloading version ${esc(u.version)}…`;
+    detail = `<div class="bar"><i style="width:${pct.toFixed(1)}%"></i></div>`;
+    button = "";
+  } else if (u.status === "installed") {
+    text = `Version ${esc(u.version)} is installed. Restarting…`;
+    button = "";
+  } else if (u.status === "failed") {
+    text = "";
+    detail = `<p class="error">${esc(u.message)}</p>`;
+    button = `<button data-action="check-updates">Check again</button>`;
+  }
+  return `
+    <div class="setting">
+      <div><strong>Speachy ${esc(S.snap.version)}</strong><small>${text}</small></div>
+      ${button}
+    </div>
+    ${detail}
+    <label class="setting">
+      <div><strong>Check automatically</strong><small>Look for a new version now and then. Nothing is installed without asking.</small></div>
+      <input type="checkbox" class="switch" data-change="toggle" data-field="check_for_updates" ${auto ? "checked" : ""} />
+    </label>`;
+}
+
 function pageSettings() {
   const s = S.snap.settings;
   const errors = S.shortcutErrors.map((e) => `<p class="error">${esc(e)}</p>`).join("");
   return `
     <header class="page-head"><h1>Settings</h1></header>
+    ${S.snap.updates_supported ? `<section class="card"><div class="card-head"><h2>Updates</h2></div><div id="updates-body">${updatesBody()}</div></section>` : ""}
     <section class="card">
       <div class="card-head"><h2>Shortcuts</h2></div>
       ${shortcutRow("speak_selection", "Speak selection", "Reads the selected text. Pressed again, stops.")}
@@ -414,6 +467,19 @@ function onSpeechEvent(e) {
   updateSpeechUi();
 }
 
+function onUpdateEvent(status) {
+  const before = S.update.status;
+  S.update = status;
+  const body = document.getElementById("updates-body");
+  if (body) body.innerHTML = updatesBody();
+  // The Home banner appears and disappears with the "available" state.
+  const flipped = (before === "available") !== (status.status === "available");
+  if (S.page === "home" && flipped) render();
+  if (status.status === "available" && before !== "available" && S.page !== "settings") {
+    toast(`Speachy ${status.version} is available. See Settings → Updates.`);
+  }
+}
+
 function onDownloadEvent(e) {
   const model = modelById(e.id);
   if (!model) return;
@@ -456,6 +522,8 @@ const ACTIONS = {
     await engine("speak", { text });
   },
   pause: () => engine("toggle_pause"),
+  "check-updates": () => call("check_for_updates"),
+  "install-update": () => call("install_update"),
   install: async (el) => {
     const model = modelById(el.dataset.id);
     model.installing = true;
@@ -586,4 +654,11 @@ window.addEventListener("focus", () => S.snap && !S.recording && refresh());
 listen("speech", (e) => onSpeechEvent(e.payload));
 listen("download", (e) => onDownloadEvent(e.payload));
 listen("notice", (e) => toast(e.payload));
+listen("update", (e) => onUpdateEvent(e.payload));
+listen("show-page", (e) => {
+  if (PAGES[e.payload]) {
+    S.page = e.payload;
+    render();
+  }
+});
 refresh();
