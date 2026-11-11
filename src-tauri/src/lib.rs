@@ -98,11 +98,15 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 pub fn run() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default()
         // Must be the first plugin: a second launch only raises the window.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             windows::show_main(app)
-        }))
+        }));
+    // The pill is a native panel on macOS.
+    #[cfg(target_os = "macos")]
+    let builder = builder.plugin(tauri_nspanel::init());
+    let app = builder
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(shortcuts::handle)

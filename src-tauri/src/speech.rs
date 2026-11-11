@@ -65,6 +65,10 @@ pub fn speak_selection(app: &AppHandle) {
             state.session.stop();
         }
         Some(text) => {
+            log::info!(
+                "speaking the selection ({} characters)",
+                text.chars().count()
+            );
             *last = text.clone();
             drop(last);
             speak(app, &text);
