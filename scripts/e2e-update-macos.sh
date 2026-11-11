@@ -22,33 +22,44 @@ TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
 export TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 # The local server speaks plain HTTP, which the updater only accepts when
 # told to; the release configuration never sets this.
-npx --yes @tauri-apps/cli@2 build --bundles app --config "{
-  \"bundle\": { \"createUpdaterArtifacts\": true },
-  \"plugins\": { \"updater\": { \"pubkey\": \"$public_key\", \"dangerousInsecureTransportProtocol\": true } }
-}"
-
+updater="\"plugins\": { \"updater\": { \"pubkey\": \"$public_key\", \"dangerousInsecureTransportProtocol\": true } }"
 bundle=target/release/bundle/macos
-version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+old_version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+new_version=99.0.0
 case "$(uname -m)" in arm64) arch=arm64 ;; *) arch=x64 ;; esac
-mkdir "$work/server" "$work/installed"
-cp "$bundle/Speachy.app.tar.gz" "$work/server/Speachy-99.0.0-macos-$arch.app.tar.gz"
-cp "$bundle/Speachy.app.tar.gz.sig" "$work/server/Speachy-99.0.0-macos-$arch.app.tar.gz.sig"
-scripts/make-update-manifest.py --version 99.0.0 --base-url "http://127.0.0.1:$port" \
+mkdir "$work/server" "$work/installed" "$work/tampered"
+
+# The version users have installed. Two copies: one to update, one to offer
+# a tampered update to.
+npx --yes @tauri-apps/cli@2 build --bundles app --config "{ $updater }"
+cp -R "$bundle/Speachy.app" "$work/installed/"
+cp -R "$bundle/Speachy.app" "$work/tampered/"
+
+# A newer version, as a signed update archive. The signature covers the
+# version, so this has to be a real build of that version.
+npx --yes @tauri-apps/cli@2 build --bundles app --config "{
+  \"version\": \"$new_version\",
+  \"bundle\": { \"createUpdaterArtifacts\": true },
+  $updater
+}"
+archive="$work/server/Speachy-$new_version-macos-$arch.app.tar.gz"
+cp "$bundle/Speachy.app.tar.gz" "$archive"
+cp "$bundle/Speachy.app.tar.gz.sig" "$archive.sig"
+scripts/make-update-manifest.py --version "$new_version" --base-url "http://127.0.0.1:$port" \
     --notes "A test update." --out "$work/server/latest.json" "$work/server"
 (cd "$work/server" && exec python3 -m http.server "$port" --bind 127.0.0.1 >/dev/null 2>&1) &
 server=$!
 trap 'kill "$server" 2>/dev/null || true' EXIT
 sleep 1
 
-cp -R "$bundle/Speachy.app" "$work/installed/"
-app="$work/installed/Speachy.app"
-marker="$app/Contents/Resources/icon.icns"
-[ -f "$marker" ] || { echo "error: $marker is not in the bundle" >&2; exit 1; }
+version_of() {
+    /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$1/Contents/Info.plist"
+}
 
-# Runs the installed copy's updater, giving up after two minutes.
+# Runs the updater of the app bundle $1, giving up after two minutes.
 update() {
     SPEACHY_HOME="$work/home" SPEACHY_UPDATE_ENDPOINT="http://127.0.0.1:$port/latest.json" \
-        "$app/Contents/MacOS/speachy" --update &
+        "$1/Contents/MacOS/speachy" --update &
     pid=$!
     ( sleep 120; kill "$pid" 2>/dev/null ) &
     watchdog=$!
@@ -58,19 +69,27 @@ update() {
     return "$code"
 }
 
-echo "--- installed version $version sees version 99.0.0 and installs it"
-rm "$marker"   # the update restores this file if it really replaces the app
-update
-[ -f "$marker" ] || { echo "error: the app bundle was not replaced" >&2; exit 1; }
+app="$work/installed/Speachy.app"
+echo "--- installed version $(version_of "$app") is offered $new_version and installs it"
+[ "$(version_of "$app")" = "$old_version" ]
+update "$app"
+if [ "$(version_of "$app")" != "$new_version" ]; then
+    echo "error: the app is still version $(version_of "$app")" >&2
+    exit 1
+fi
 codesign --verify --deep --strict "$app"
-echo "ok: the app updated itself"
+"$app/Contents/MacOS/speachy" --update | grep -q "is the newest version"
+echo "ok: the app updated itself to $new_version and now reports being up to date"
 
+app="$work/tampered/Speachy.app"
 echo "--- an update that was altered after signing is refused"
-rm "$marker"
-printf 'x' >>"$work/server/Speachy-99.0.0-macos-$arch.app.tar.gz"
-if update; then
+printf 'x' >>"$archive"
+if update "$app"; then
     echo "error: a tampered update was accepted" >&2
     exit 1
 fi
-[ ! -f "$marker" ] || { echo "error: a tampered update was installed" >&2; exit 1; }
-echo "ok: the tampered update was refused"
+if [ "$(version_of "$app")" != "$old_version" ]; then
+    echo "error: a tampered update was installed" >&2
+    exit 1
+fi
+echo "ok: the tampered update was refused and version $old_version is untouched"
