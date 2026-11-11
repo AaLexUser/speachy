@@ -78,7 +78,8 @@ if [ "$(version_of "$app")" != "$new_version" ]; then
     exit 1
 fi
 codesign --verify --deep --strict "$app"
-"$app/Contents/MacOS/speachy" --update | grep -q "is the newest version"
+SPEACHY_HOME="$work/home" SPEACHY_UPDATE_ENDPOINT="http://127.0.0.1:$port/latest.json" \
+    "$app/Contents/MacOS/speachy" --update | grep -q "is the newest version"
 echo "ok: the app updated itself to $new_version and now reports being up to date"
 
 app="$work/tampered/Speachy.app"
