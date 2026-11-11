@@ -10,7 +10,9 @@
 # so run it after anything that needs the normal build.
 set -eu
 cd "$(dirname "$0")/.."
-work=$(mktemp -d)
+# The physical path: macOS temporary directories sit behind a symlink, and
+# the updater refuses to replace an app that was started through one.
+work=$(cd "$(mktemp -d)" && pwd -P)
 port=8765
 
 npx --yes @tauri-apps/cli@2 signer generate --ci -w "$work/test.key" >/dev/null
