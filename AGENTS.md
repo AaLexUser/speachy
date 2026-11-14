@@ -6,6 +6,18 @@ is separate from the interface, and everything the app does is an engine
 command you can run from a terminal.** You do not need the window, a
 screen or a sound card to build, debug or verify engine work.
 
+## How changes land
+
+- `main` is the branch releases are cut from. Do not push to it.
+- Do each piece of work on its own branch and open a pull request against
+  `main`. CI (the **Build** workflow) runs on every pull request; it must
+  pass.
+- Merge only after the pull request has been approved, and merge by
+  **squash**, so `main` gets one commit per change.
+- Releases: set the version in `Cargo.toml` through a pull request, then run
+  the **Release** workflow on `main` (it leaves a draft) and **Publish
+  release** once the draft has been checked. See the README.
+
 ## Layers
 
 | Crate | What it is | May depend on |
