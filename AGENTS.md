@@ -85,6 +85,7 @@ speachy-cli detect "Dies ist ein Test."
 speachy-cli speak --no-audio "Timing only."       # synthesize, discard the audio
 speachy-cli speak --out out.wav "Keep the audio." # write a WAV instead of playing
 speachy-cli settings speed=1.2 shortcuts.stop=F9
+speachy-cli audio                     # the sound output device and whether it can be used
 speachy-cli run '{"cmd":"snapshot"}'  # any engine command, as the app sends it
 ```
 

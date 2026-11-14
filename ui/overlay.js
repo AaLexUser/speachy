@@ -26,6 +26,8 @@ function render() {
   } else {
     label.textContent = TEXT[view.state] || "Speachy";
   }
+  // The pill shows one line; the whole text is there on hover.
+  label.title = label.textContent;
 }
 
 listen("speech", ({ payload: e }) => {
