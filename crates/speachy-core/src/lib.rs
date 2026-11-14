@@ -7,6 +7,7 @@
 //! * [`plan`] — choosing a voice for every chunk
 //! * [`engine`] — synthesis (sherpa-onnx)
 //! * [`audio`] — gapless audio output
+//! * [`output`] — finding and opening the sound output device
 //! * [`pipeline`] — the synthesize-ahead speech pipeline
 //! * [`session`] — the front door: one object, driven by commands, that
 //!   every front end (app, CLI, JSON channel) uses
@@ -18,6 +19,7 @@ pub mod english;
 pub mod lang;
 pub mod models;
 pub mod numbers;
+pub mod output;
 pub mod pipeline;
 pub mod plan;
 pub mod session;

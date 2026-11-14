@@ -207,7 +207,7 @@ may ask for Accessibility access again after an update.
 
 ### Releasing
 
-Set the version in `Cargo.toml`, then push a tag `vX.Y.Z` that matches it.
+Set the version in `Cargo.toml` on `main`, then push a tag `vX.Y.Z` that matches it.
 The **Release** workflow builds the app for Apple Silicon and Intel and the
 CLI for macOS and Linux, checks each build (the CLI installs a model and
 synthesizes a sentence; the app is launched), and publishes a GitHub release

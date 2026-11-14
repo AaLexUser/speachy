@@ -1,7 +1,10 @@
 name: Build
 
+# Changes reach main through pull requests: every pull request is built and
+# tested, and so is main after each merge.
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
