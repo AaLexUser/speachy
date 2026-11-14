@@ -1,4 +1,11 @@
+<!-- The body of each GitHub release. Rewrite "What's new" in the pull request that sets the version. -->
 Select text anywhere, press ⌃⌥S, and hear it read aloud by a text-to-speech model that runs on your computer.
+
+## What's new
+
+- **Sound output is opened more tolerantly.** Speech could fail with "could not open the default audio output device" when Bluetooth headphones such as AirPods were the output. Speachy now tries several configurations before giving up, and retries briefly while a headset is switching modes.
+- **Clearer errors.** If the output still cannot be opened, the message names the device and the reason. The pill shows the whole of a long message when you hover over it.
+- **`speachy-cli audio`** shows the sound output device, the formats it supports and whether it can be used.
 
 ## Downloads
 

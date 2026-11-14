@@ -4563,7 +4563,7 @@ dependencies = [
 
 [[package]]
 name = "speachy"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -4591,7 +4591,7 @@ dependencies = [
 
 [[package]]
 name = "speachy-cli"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "clap",
  "env_logger",
@@ -4602,7 +4602,7 @@ dependencies = [
 
 [[package]]
 name = "speachy-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "bzip2 0.6.1",
