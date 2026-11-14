@@ -94,6 +94,9 @@ enum Cmd {
         #[arg(long)]
         no_audio: bool,
     },
+    /// Show the sound output device, the formats it supports, and whether
+    /// it can be used. Helps when speech fails with a device error.
+    Audio,
     /// Print where models and settings are kept.
     Paths,
 }
@@ -483,6 +486,29 @@ fn run_command(
             }
         }
         Cmd::Serve { .. } => serve(session)?,
+        Cmd::Audio => {
+            let report = speachy_core::output::report();
+            if json_output {
+                print_json(&json!(report));
+            } else {
+                println!(
+                    "device     {}",
+                    report.device.as_deref().unwrap_or("none found")
+                );
+                println!(
+                    "preferred  {}",
+                    report.preferred_format.as_deref().unwrap_or("unknown")
+                );
+                for format in &report.supported_formats {
+                    println!("supports   {format}");
+                }
+                println!("usable     {}", if report.usable { "yes" } else { "no" });
+                println!("detail     {}", report.detail);
+            }
+            if !report.usable {
+                return Err("the sound output device cannot be used".into());
+            }
+        }
         Cmd::Paths => {
             let paths = session.paths();
             if json_output {

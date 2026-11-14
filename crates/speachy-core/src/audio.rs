@@ -1,7 +1,7 @@
 //! Audio output: a gapless queue of synthesized chunks.
 
 use crate::engine::Audio;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -130,8 +130,7 @@ struct SystemStream {
 
 impl AudioBackend for SystemAudio {
     fn open(&self, on_event: PlayCallback) -> Result<Box<dyn AudioStream>> {
-        let mut device = rodio::DeviceSinkBuilder::open_default_sink()
-            .context("could not open the default audio output device")?;
+        let mut device = crate::output::open_default()?;
         device.log_on_drop(false);
         let player = rodio::Player::connect_new(device.mixer());
         Ok(Box::new(SystemStream {
