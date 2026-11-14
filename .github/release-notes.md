@@ -1,3 +1,4 @@
+<!-- The body of each GitHub release. Rewrite "What's new" in the pull request that sets the version. -->
 Select text anywhere, press ⌃⌥S, and hear it read aloud by a text-to-speech model that runs on your computer.
 
 ## What's new
