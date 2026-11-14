@@ -1,0 +1,36 @@
+name: Publish release
+
+# Makes a draft release public, as the newest release. The Release workflow
+# leaves a draft when it is run by hand; this publishes it once it has been
+# looked over. Publishing creates the tag and is what installed apps see
+# when they check for updates.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag of the draft release to publish, e.g. v0.1.1"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: Publish ${{ inputs.tag }}
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ inputs.tag }}
+    steps:
+      - name: Show what is being published
+        run: |
+          gh release view "$TAG" --json name,isDraft,isPrerelease,assets \
+            --jq '"\(.name)  draft=\(.isDraft) prerelease=\(.isPrerelease)", (.assets[] | "  \(.name)  \(.size) bytes")'
+          if ! gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx latest.json; then
+            echo "::warning::This release has no latest.json: installed apps will not be offered it as an update."
+          fi
+      - name: Publish
+        run: gh release edit "$TAG" --draft=false --latest

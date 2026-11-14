@@ -212,8 +212,9 @@ The **Release** workflow builds the app for Apple Silicon and Intel and the
 CLI for macOS and Linux, checks each build (the CLI installs a model and
 synthesizes a sentence; the app is launched), and publishes a GitHub release
 with the files, their checksums, and the signed update archives and
-`latest.json` that installed apps look for. Running the workflow by hand from the
-Actions tab does the same but leaves the release as a draft.
+`latest.json` that installed apps look for. Running the workflow by
+hand from the Actions tab does the same but leaves the release as a draft;
+the **Publish release** workflow then makes it public.
 
 ## Status and known limitations
 
