@@ -3,6 +3,7 @@
 use crate::engine::Audio;
 use anyhow::{Context, Result};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::TryRecvError;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -209,6 +210,36 @@ impl CaptureAudio {
     }
 }
 
+/// The clock of the virtual sound card: the time at which the audio
+/// consumed so far has finished "playing".
+///
+/// Waiting until that time, rather than for the length of each block, is
+/// what keeps playback at the intended pace: a thread never sleeps exactly
+/// as long as asked, and on a busy machine it oversleeps by more than a
+/// block. Time lost that way is made up on the following blocks.
+struct Pacer {
+    played_until: Instant,
+}
+
+impl Pacer {
+    fn new(now: Instant) -> Self {
+        Self { played_until: now }
+    }
+
+    /// Records that `audio` more was consumed at time `now`. Returns how
+    /// long to wait before consuming more; nothing when running late.
+    fn consumed(&mut self, audio: Duration, now: Instant) -> Duration {
+        self.played_until += audio;
+        self.played_until.saturating_duration_since(now)
+    }
+
+    /// Playback stood still (paused, or nothing was queued): time that
+    /// passed meanwhile is not to be made up.
+    fn resume(&mut self, now: Instant) {
+        self.played_until = self.played_until.max(now);
+    }
+}
+
 struct CaptureStream {
     queue: std::sync::mpsc::Sender<ChunkSource>,
     paused: Arc<AtomicBool>,
@@ -227,33 +258,44 @@ impl AudioBackend for CaptureAudio {
         let keep = self.keep;
         // Stand-in for the device callback thread.
         std::thread::spawn(move || {
-            // When the audio consumed so far has "finished playing". Sleeping
-            // until this absolute time, rather than for each block's length,
-            // keeps the clock from drifting with every sleep's overshoot.
-            let mut played_until = Instant::now();
-            for mut source in incoming {
+            let mut pacer = Pacer::new(Instant::now());
+            loop {
+                let mut source = match incoming.try_recv() {
+                    Ok(source) => source,
+                    Err(TryRecvError::Disconnected) => return,
+                    // Nothing queued: playback stands still until there is.
+                    Err(TryRecvError::Empty) => match incoming.recv() {
+                        Ok(source) => {
+                            pacer.resume(Instant::now());
+                            source
+                        }
+                        Err(_) => return,
+                    },
+                };
                 let sample_rate = source.sample_rate;
                 let mut samples = Vec::with_capacity(source.size_hint().0);
                 // Consume in 10 ms blocks, like a device callback would.
                 let block = (sample_rate as usize / 100).max(1);
+                let mut was_paused = false;
                 loop {
                     if stop_flag.load(Ordering::Relaxed) {
                         return;
                     }
                     if paused_flag.load(Ordering::Relaxed) {
+                        was_paused = true;
                         std::thread::sleep(Duration::from_millis(2));
                         continue;
+                    }
+                    if std::mem::take(&mut was_paused) {
+                        pacer.resume(Instant::now());
                     }
                     let before = samples.len();
                     samples.extend(source.by_ref().take(block));
                     let got = samples.len() - before;
                     if time_scale.is_finite() && got > 0 {
-                        let secs = got as f64 / sample_rate as f64 / time_scale as f64;
-                        // After a pause or an empty queue the clock restarts
-                        // from now; it never tries to catch up.
-                        played_until =
-                            played_until.max(Instant::now()) + Duration::from_secs_f64(secs);
-                        std::thread::sleep(played_until.saturating_duration_since(Instant::now()));
+                        let audio = got as f64 / sample_rate as f64 / time_scale as f64;
+                        let wait = pacer.consumed(Duration::from_secs_f64(audio), Instant::now());
+                        std::thread::sleep(wait);
                     }
                     if got < block {
                         break;
@@ -296,5 +338,77 @@ impl AudioStream for CaptureStream {
 impl Drop for CaptureStream {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const BLOCK: Duration = Duration::from_millis(10);
+
+    /// Consumes `blocks` blocks on a machine where every sleep lasts
+    /// `overshoot` longer than asked. Returns how long that took.
+    fn play(blocks: u32, overshoot: Duration) -> Duration {
+        let start = Instant::now();
+        let mut now = start;
+        let mut pacer = Pacer::new(start);
+        for _ in 0..blocks {
+            let wait = pacer.consumed(BLOCK, now);
+            if !wait.is_zero() {
+                now += wait + overshoot;
+            }
+        }
+        now - start
+    }
+
+    #[test]
+    fn late_wakeups_are_made_up() {
+        let start = Instant::now();
+        let mut pacer = Pacer::new(start);
+        // On time: wait a whole block.
+        assert_eq!(pacer.consumed(BLOCK, start), BLOCK);
+        // Woken 7 ms late: the next wait is 7 ms shorter.
+        let late = start + BLOCK + Duration::from_millis(7);
+        assert_eq!(pacer.consumed(BLOCK, late), Duration::from_millis(3));
+        // Woken later than a whole block: no wait at all.
+        let very_late = start + Duration::from_millis(45);
+        assert_eq!(pacer.consumed(BLOCK, very_late), Duration::ZERO);
+    }
+
+    #[test]
+    fn one_second_of_audio_takes_one_second_however_badly_sleeps_overshoot() {
+        for overshoot_ms in [0, 1, 7, 25, 60] {
+            let overshoot = Duration::from_millis(overshoot_ms);
+            let took = play(100, overshoot);
+            // Never early, and late by one overshoot at most.
+            assert!(
+                took >= Duration::from_millis(990),
+                "{overshoot_ms} ms: took {took:?}"
+            );
+            assert!(
+                took <= Duration::from_secs(1) + overshoot,
+                "{overshoot_ms} ms: took {took:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn time_spent_standing_still_is_not_made_up() {
+        let start = Instant::now();
+        let mut pacer = Pacer::new(start);
+        pacer.consumed(BLOCK, start);
+        // Paused for a second: playback continues from now, at normal pace.
+        let later = start + Duration::from_secs(1);
+        pacer.resume(later);
+        assert_eq!(pacer.consumed(BLOCK, later), BLOCK);
+        // Resuming while still ahead of the clock changes nothing.
+        let mut pacer = Pacer::new(start);
+        pacer.consumed(BLOCK, start);
+        pacer.resume(start + Duration::from_millis(4));
+        assert_eq!(
+            pacer.consumed(BLOCK, start + Duration::from_millis(4)),
+            Duration::from_millis(16)
+        );
     }
 }
