@@ -40,13 +40,17 @@ bottom of the screen shows what is being read.
 | **Supertonic 3** (recommended) | 129 MB | 31 | 10 | Fast, 44.1 kHz. The one to use with language detection. |
 | Kokoro 82M v1.0 | 350 MB | English (US, British), Chinese | 36 | Expressive voices; needs a faster machine to stay ahead of playback. |
 | Kokoro 82M v1.0 (compact) | 132 MB | same | 36 | 8-bit quantized: smaller download, somewhat slower. |
+| Pocket TTS | 104 MB | English | 8 | Imitates recorded voices, so each sounds like a particular person; natural intonation. |
 | KittenTTS Nano 0.2 | 33 MB | English | 8 | Tiny and fast; skips words missing from its dictionary. |
 | KittenTTS Mini 0.1 | 163 MB | English | 8 | Larger KittenTTS model, same limitation. |
 
 All of them run through [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)
 on the CPU. Model weights are downloaded from the sherpa-onnx `tts-models`
 release into the app's data directory and carry their own licences
-(Supertonic: OpenRAIL-M; Kokoro and KittenTTS: Apache-2.0).
+(Supertonic: OpenRAIL-M; Kokoro and KittenTTS: Apache-2.0; Pocket TTS:
+CC BY 4.0, with voice recordings from Kyutai's
+[tts-voices](https://huggingface.co/kyutai/tts-voices) under CC BY 4.0 and
+CC0).
 
 ## Install
 
