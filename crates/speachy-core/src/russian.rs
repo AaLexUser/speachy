@@ -502,6 +502,14 @@ impl Amount {
     fn form(self, case: Case) -> Form {
         match self {
             Amount::Whole(n) => form(n, case),
+            // "около двух с половиной тысяч", "менее полутора тысяч": a
+            // half in the genitive takes the plural, unlike other decimals
+            // ("до двух целых трёх десятых процента").
+            Amount::Decimal {
+                whole: 1..,
+                fraction: 5,
+                places: 1,
+            } if case == Case::Genitive => Form::Many,
             Amount::Decimal { .. } => Form::Few,
         }
     }
@@ -1180,7 +1188,7 @@ mod tests {
             ),
             (
                 "Осталось менее 2,5 кг и около 1,5 тыс. рублей.",
-                "Осталось менее двух с половиной килограмма и около полутора тысячи рублей.",
+                "Осталось менее двух с половиной килограммов и около полутора тысяч рублей.",
             ),
             (
                 "Население составляет 1,4 млн чел., из них 52% — женщины.",
