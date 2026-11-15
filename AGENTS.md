@@ -63,7 +63,9 @@ commands, as `{"cmd": "<name>", …}`:
 
 Events (`session::Event`) are `{"event": "<kind>", "data": …}` with kinds
 `speech` (state changes, chunk ready / playing, finished), `download`,
-`settings` and `notice`.
+`settings` and `notice`. A `chunk_ready` event carries the chunk's loudness
+over time (`levels`, one value from 0 to 100 for every 40 ms of audio), which
+is what the pill's bars draw.
 
 **Adding behaviour:** add a method to `Session`, a `Command` variant that
 calls it, and a test in `crates/speachy-core/tests/session.rs`. Expose it in
