@@ -31,36 +31,26 @@
         color: #f2f2f3;
         box-sizing: border-box;
       }
+      /* The bars are drawn by overlay.js: the loudness of the speech being
+         heard, moving from right to left. */
       .bars {
         display: flex;
         align-items: center;
-        gap: 2.5px;
+        gap: 2px;
         height: 20px;
         flex: none;
       }
       .bars i {
-        width: 3px;
-        height: 100%;
-        border-radius: 2px;
+        width: 2.5px;
+        height: 3px;
+        border-radius: 1.25px;
         background: linear-gradient(#ffbe50, #ff7056);
-        transform: scaleY(0.25);
-        transform-origin: center;
+        will-change: height;
       }
-      .pill[data-state="speaking"] .bars i {
-        animation: wave 0.9s ease-in-out infinite;
-      }
-      .pill[data-state="loading"] .bars i,
-      .pill[data-state="preparing"] .bars i {
-        animation: wave 1.6s ease-in-out infinite;
+      .pill[data-state="loading"] .bars,
+      .pill[data-state="preparing"] .bars,
+      .pill[data-state="paused"] .bars {
         opacity: 0.55;
-      }
-      .bars i:nth-child(2) { animation-delay: -0.15s; }
-      .bars i:nth-child(3) { animation-delay: -0.3s; }
-      .bars i:nth-child(4) { animation-delay: -0.45s; }
-      .bars i:nth-child(5) { animation-delay: -0.6s; }
-      @keyframes wave {
-        0%, 100% { transform: scaleY(0.25); }
-        50% { transform: scaleY(1); }
       }
       #label {
         flex: 1;
@@ -85,14 +75,11 @@
       button:hover { background: rgb(255 255 255 / 0.22); }
       button svg { width: 12px; height: 12px; fill: currentColor; }
       .pill[data-state="idle"] button { display: none; }
-      @media (prefers-reduced-motion: reduce) {
-        .bars i { animation: none !important; transform: scaleY(0.6); }
-      }
     </style>
   </head>
   <body>
     <div class="pill" id="pill" data-state="idle">
-      <div class="bars"><i></i><i></i><i></i><i></i><i></i></div>
+      <div class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
       <span id="label">Speachy</span>
       <button id="pause" title="Pause" aria-label="Pause">
         <svg viewBox="0 0 12 12" id="pause-icon"><path d="M2.5 1.5h2.4v9H2.5zm4.6 0h2.4v9H7.1z" /></svg>
