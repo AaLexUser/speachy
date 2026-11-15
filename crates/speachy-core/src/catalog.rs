@@ -15,6 +15,7 @@ pub enum Family {
     Supertonic,
     Kokoro,
     Kitten,
+    Pocket,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -42,6 +43,10 @@ pub struct VoiceInfo {
     /// `gb` or `zh` pick the lexicons and text rules). Two voices with
     /// different variants need separately loaded engines.
     pub variant: Option<String>,
+    /// For a model that speaks in the voice of a recording it is given
+    /// (Pocket TTS): the recording of this voice, a file in the model's
+    /// directory.
+    pub reference: Option<String>,
 }
 
 /// An extra file that lives outside the model archive.
@@ -134,6 +139,7 @@ fn build() -> Vec<ModelInfo> {
             349_886_476,
             "Expressive, natural English and Chinese voices at full precision.",
         ),
+        pocket(),
         kitten(
             "kitten-nano-v0.2",
             "KittenTTS Nano 0.2",
@@ -173,6 +179,7 @@ fn supertonic() -> ModelInfo {
                 languages: languages.clone(),
                 accent: None,
                 variant: None,
+                reference: None,
             }
         })
         .collect();
@@ -265,6 +272,7 @@ fn kokoro(id: &str, name: &str, dir: &str, size: u64, description: &str) -> Mode
                 languages,
                 accent: Some(accent.into()),
                 variant: Some(variant.into()),
+                reference: None,
             }
         })
         .collect();
@@ -309,6 +317,7 @@ fn kitten(id: &str, name: &str, dir: &str, size: u64, description: &str) -> Mode
             languages: strings(&["en"]),
             accent: Some("US".into()),
             variant: None,
+            reference: None,
         })
         .collect();
     let lexicon = ExtraFile {
@@ -332,6 +341,96 @@ fn kitten(id: &str, name: &str, dir: &str, size: u64, description: &str) -> Mode
         default_voice: "expr-voice-2-f".into(),
         recommended: false,
         speed_tier: 3,
+    }
+}
+
+fn pocket() -> ModelInfo {
+    // Pocket TTS speaks in the voice of a recording. These are the ones
+    // Kyutai offers with it that anyone may use: a voice actor's (CC BY
+    // 4.0), donated voices (CC0) and speakers of the VCTK corpus (CC BY 4.0).
+    const VOICES: &[(&str, Gender, &str, u64)] = &[
+        ("Alba", Gender::Female, "alba-mackenna/casual.wav", 958_542),
+        (
+            "Fantine",
+            Gender::Female,
+            "vctk/p244_023_enhanced.wav",
+            674_852,
+        ),
+        (
+            "Eponine",
+            Gender::Female,
+            "vctk/p262_023_enhanced.wav",
+            716_330,
+        ),
+        (
+            "Azelma",
+            Gender::Female,
+            "vctk/p303_023_enhanced.wav",
+            823_852,
+        ),
+        (
+            "Javert",
+            Gender::Male,
+            "voice-donations/Butter.wav",
+            480_044,
+        ),
+        (
+            "Charles",
+            Gender::Male,
+            "vctk/p254_023_enhanced.wav",
+            639_272,
+        ),
+        ("Paul", Gender::Male, "vctk/p259_023_enhanced.wav", 717_182),
+        (
+            "George",
+            Gender::Male,
+            "vctk/p315_023_enhanced.wav",
+            642_692,
+        ),
+    ];
+    // A fixed revision, so the recordings cannot change under an install.
+    const RECORDINGS: &str = "https://huggingface.co/kyutai/tts-voices/resolve/\
+                              323332d33f997de8394f24a193e1a76df720e01a";
+    let mut voices = Vec::new();
+    let mut recordings = Vec::new();
+    for (sid, &(name, gender, path, size)) in VOICES.iter().enumerate() {
+        let id = name.to_lowercase();
+        let filename = format!("voice-{id}.wav");
+        voices.push(VoiceInfo {
+            id,
+            name: name.into(),
+            sid: sid as i32,
+            gender,
+            languages: strings(&["en"]),
+            accent: None,
+            variant: None,
+            reference: Some(filename.clone()),
+        });
+        recordings.push(ExtraFile {
+            url: format!("{RECORDINGS}/{path}"),
+            filename,
+            size_bytes: size,
+        });
+    }
+    let dir = "sherpa-onnx-pocket-tts-int8-2026-01-26";
+    ModelInfo {
+        id: "pocket-tts".into(),
+        name: "Pocket TTS".into(),
+        family: Family::Pocket,
+        description: "Kyutai's 100M-parameter English model. It imitates a recorded voice, \
+                      so its voices sound like particular people, with natural intonation."
+            .into(),
+        license: "Kyutai (CC BY 4.0); voices CC BY 4.0 and CC0".into(),
+        archive_url: format!("{RELEASE}/{dir}.tar.bz2"),
+        archive_dir: dir.into(),
+        size_bytes: 98_336_520 + recordings.iter().map(|f| f.size_bytes).sum::<u64>(),
+        extra_files: recordings,
+        sample_rate: 24_000,
+        languages: strings(&["en"]),
+        voices,
+        default_voice: "alba".into(),
+        recommended: false,
+        speed_tier: 2,
     }
 }
 
@@ -399,6 +498,15 @@ mod tests {
                     v.id
                 );
                 assert!(sids.insert(v.sid), "{}: duplicate sid {}", m.id, v.sid);
+                // A voice that imitates a recording gets it with the model.
+                assert_eq!(v.reference.is_some(), m.family == Family::Pocket);
+                if let Some(recording) = &v.reference {
+                    assert!(
+                        m.extra_files.iter().any(|f| &f.filename == recording),
+                        "{}: nothing downloads {recording}",
+                        m.id
+                    );
+                }
                 assert!(!v.languages.is_empty());
                 for l in &v.languages {
                     assert!(

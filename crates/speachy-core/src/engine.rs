@@ -4,8 +4,9 @@ use crate::catalog::{Family, ModelInfo};
 use crate::english::Phonemizer;
 use anyhow::{anyhow, bail, Context, Result};
 use sherpa_onnx::{
-    GenerationConfig, OfflineTts, OfflineTtsConfig, OfflineTtsKittenModelConfig,
-    OfflineTtsKokoroModelConfig, OfflineTtsModelConfig, OfflineTtsSupertonicModelConfig,
+    GenerationConfig, LinearResampler, OfflineTts, OfflineTtsConfig, OfflineTtsKittenModelConfig,
+    OfflineTtsKokoroModelConfig, OfflineTtsModelConfig, OfflineTtsPocketModelConfig,
+    OfflineTtsSupertonicModelConfig, Wave,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -65,6 +66,61 @@ pub struct SherpaEngine {
     family: Family,
     /// English phonemizer, for the families that are given phonemes.
     phonemizer: Option<Phonemizer>,
+    /// Recordings of the voices, by speaker id, for the families that
+    /// imitate one.
+    recordings: HashMap<i32, Recording>,
+}
+
+/// A recording of a voice for the model to imitate.
+struct Recording {
+    samples: Vec<f32>,
+    sample_rate: i32,
+}
+
+impl Recording {
+    /// Reads a WAV file, converted to `sample_rate` so the model does not
+    /// have to convert it for every sentence.
+    fn read(path: &str, sample_rate: i32) -> Result<Self> {
+        let wave = Wave::read(path)
+            .ok_or_else(|| anyhow!("{path} is not a WAV file this model can read"))?;
+        if wave.samples().is_empty() || wave.sample_rate() <= 0 {
+            bail!("{path} holds no audio");
+        }
+        if sample_rate <= 0 || wave.sample_rate() == sample_rate {
+            return Ok(Self {
+                samples: wave.samples().to_vec(),
+                sample_rate: wave.sample_rate(),
+            });
+        }
+        let resampler = LinearResampler::create(wave.sample_rate(), sample_rate)
+            .ok_or_else(|| anyhow!("cannot convert {path} to {sample_rate} Hz"))?;
+        Ok(Self {
+            samples: resampler.resample(wave.samples(), true),
+            sample_rate,
+        })
+    }
+}
+
+/// Steps of Pocket TTS's sampler for each frame of audio.
+const POCKET_STEPS: i32 = 2;
+
+/// Brings speech to a common loudness without exceeding full scale. Pocket
+/// TTS speaks as loudly as the recording it imitates, which differs several
+/// times over between voices and can clip.
+fn level(samples: &mut [f32]) {
+    const LOUDNESS: f32 = 0.1;
+    const CEILING: f32 = 0.95;
+    let peak = samples.iter().fold(0f32, |m, s| m.max(s.abs()));
+    if samples.is_empty() || peak < 1e-4 {
+        return;
+    }
+    let power = samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32;
+    let gain = (LOUDNESS / power.sqrt())
+        .clamp(0.25, 8.0)
+        .min(CEILING / peak);
+    for sample in samples {
+        *sample *= gain;
+    }
 }
 
 fn existing(dir: &Path, names: &[&str]) -> Result<String> {
@@ -157,6 +213,20 @@ impl SherpaEngine {
                     ..Default::default()
                 };
             }
+            Family::Pocket => {
+                config.model.pocket = OfflineTtsPocketModelConfig {
+                    lm_flow: Some(file(&["lm_flow.int8.onnx", "lm_flow.onnx"])?),
+                    lm_main: Some(file(&["lm_main.int8.onnx", "lm_main.onnx"])?),
+                    encoder: Some(file(&["encoder.onnx"])?),
+                    decoder: Some(file(&["decoder.int8.onnx", "decoder.onnx"])?),
+                    text_conditioner: Some(file(&["text_conditioner.onnx"])?),
+                    vocab_json: Some(file(&["vocab.json"])?),
+                    token_scores_json: Some(file(&["token_scores.json"])?),
+                    // What the model makes of a recording is kept, so each
+                    // voice is analysed once.
+                    voice_embedding_cache_capacity: model.voices.len() as i32,
+                };
+            }
         }
         let tts = OfflineTts::create(&config).with_context(|| {
             format!(
@@ -165,12 +235,21 @@ impl SherpaEngine {
                 dir.display()
             )
         })?;
+        let mut recordings = HashMap::new();
+        for voice in &model.voices {
+            let Some(name) = &voice.reference else {
+                continue;
+            };
+            let recording = Recording::read(&file(&[name])?, tts.sample_rate())?;
+            recordings.insert(voice.sid, recording);
+        }
         let phonemizer =
             (model.family == Family::Kokoro).then(|| Phonemizer::new(variant == Some("gb")));
         Ok(Self {
             tts,
             family: model.family,
             phonemizer,
+            recordings,
         })
     }
 
@@ -211,13 +290,22 @@ impl Synthesizer for SherpaEngine {
             }
             _ => {}
         }
-        let config = GenerationConfig {
+        let mut config = GenerationConfig {
             sid: req.sid,
             speed: req.speed.clamp(0.25, 4.0),
             extra: Some(extra),
             phoneme_codepoints: phonemes,
             ..Default::default()
         };
+        if self.family == Family::Pocket {
+            let recording = self
+                .recordings
+                .get(&req.sid)
+                .ok_or_else(|| anyhow!("this model has no voice {}", req.sid))?;
+            config.reference_audio = Some(recording.samples.clone());
+            config.reference_sample_rate = recording.sample_rate;
+            config.num_steps = POCKET_STEPS;
+        }
         let flag = cancel.clone();
         let keep_going = move |_: &[f32], _: f32| !flag.load(Ordering::Relaxed);
         let audio = self
@@ -227,8 +315,12 @@ impl Synthesizer for SherpaEngine {
         if cancel.load(Ordering::Relaxed) {
             return Ok(None);
         }
+        let mut samples = audio.samples().to_vec();
+        if self.family == Family::Pocket {
+            level(&mut samples);
+        }
         Ok(Some(Audio {
-            samples: audio.samples().to_vec(),
+            samples,
             sample_rate: audio.sample_rate().max(1) as u32,
         }))
     }
@@ -324,5 +416,56 @@ impl EngineProvider for EngineCache {
             .lock()
             .unwrap()
             .retain(|(k, _)| k.model_id != model_id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::level;
+
+    fn loudness(samples: &[f32]) -> f32 {
+        (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
+    }
+
+    fn tone(amplitude: f32) -> Vec<f32> {
+        (0..2400)
+            .map(|i| amplitude * (i as f32 * 0.05).sin())
+            .collect()
+    }
+
+    #[test]
+    fn quiet_and_loud_speech_end_up_equally_loud() {
+        let (mut quiet, mut loud) = (tone(0.02), tone(0.4));
+        level(&mut quiet);
+        level(&mut loud);
+        assert!(
+            (loudness(&quiet) - 0.1).abs() < 0.005,
+            "{}",
+            loudness(&quiet)
+        );
+        assert!((loudness(&loud) - 0.1).abs() < 0.005, "{}", loudness(&loud));
+    }
+
+    #[test]
+    fn levelling_never_clips() {
+        // Mostly silence with one loud burst: raising it to the common
+        // loudness would push the burst past full scale.
+        let mut samples = vec![0.0; 24_000];
+        samples[100..200].fill(0.5);
+        level(&mut samples);
+        let peak = samples.iter().fold(0f32, |m, s| m.max(s.abs()));
+        assert!(peak <= 0.95 + 1e-6, "{peak}");
+        // Audio that already exceeds full scale is brought back under it.
+        let mut hot = tone(1.3);
+        level(&mut hot);
+        assert!(hot.iter().all(|s| s.abs() <= 0.95 + 1e-6));
+    }
+
+    #[test]
+    fn silence_is_left_alone() {
+        let mut silence = vec![0.0; 100];
+        level(&mut silence);
+        assert!(silence.iter().all(|s| *s == 0.0));
+        level(&mut []);
     }
 }
