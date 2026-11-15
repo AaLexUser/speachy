@@ -1,11 +1,13 @@
-//! Marks the stressed vowel of Russian words.
+//! Marks the stressed vowel of Russian words, and restores ё.
 //!
 //! Supertonic sometimes stresses the wrong syllable of a Russian word, but it
-//! follows an acute accent (U+0301) placed after a vowel. The stress comes
-//! from a dictionary table built by `scripts/make-stress-dict.py`: words in
-//! byte order of Windows-1251, front-coded in blocks of 64 and compressed
-//! with bzip2. Words with one vowel, with ё, and words whose stress depends on
-//! the meaning are not in it, so they are left unmarked.
+//! follows an acute accent (U+0301) placed after a vowel. Most Russian text
+//! also prints е where ё is meant ("еще", "идет"), which changes both the
+//! vowel and the stress. Both come from a dictionary table built by
+//! `scripts/make-stress-dict.py`: words in byte order of Windows-1251,
+//! front-coded in blocks of 64 and compressed with bzip2. Words whose reading
+//! depends on the meaning ("замок", "берет", "все") are not in it, nor are
+//! words already written with ё, so they are left as they are.
 
 use std::io::Read;
 use std::sync::OnceLock;
@@ -16,8 +18,26 @@ const COMPRESSED: &[u8] = include_bytes!("../data/ru-stress.bz2");
 /// Windows-1251 bytes of а е и о у ы э ю я.
 const VOWELS: [u8; 9] = [0xE0, 0xE5, 0xE8, 0xEE, 0xF3, 0xFB, 0xFD, 0xFE, 0xFF];
 
+/// What the table knows about a word.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Reading {
+    /// The stress falls on this vowel, counting from 1.
+    Stressed(u8),
+    /// This vowel is printed е and read ё, which is always stressed.
+    Yo(u8),
+}
+
+impl Reading {
+    fn from_byte(byte: u8) -> Reading {
+        match byte & 0x80 {
+            0 => Reading::Stressed(byte),
+            _ => Reading::Yo(byte & 0x7F),
+        }
+    }
+}
+
 /// The decompressed dictionary and where its blocks start. Each entry is
-/// `shared`, `rest` and `vowel` bytes, then `rest` bytes of the word after the
+/// `shared`, `rest` and reading bytes, then `rest` bytes of the word after the
 /// `shared` bytes it has in common with the previous word.
 struct Table {
     data: Vec<u8>,
@@ -44,20 +64,19 @@ impl Table {
         Some(Table { data, block_starts })
     }
 
-    /// Calls `visit` with each word of the block starting at `from` and the
-    /// number of its stressed vowel, until the block ends or `visit` returns
-    /// false.
+    /// Calls `visit` with each word of the block starting at `from` and its
+    /// reading, until the block ends or `visit` returns false.
     fn walk_block(
         &self,
         from: usize,
         word: &mut Vec<u8>,
-        mut visit: impl FnMut(&[u8], u8) -> bool,
+        mut visit: impl FnMut(&[u8], Reading) -> bool,
     ) {
         word.clear();
         let mut at = from;
         let mut first = true;
         while let Some(head) = self.data.get(at..at + 3) {
-            let (shared, rest, vowel) = (head[0], head[1], head[2]);
+            let (shared, rest, reading) = (head[0], head[1], Reading::from_byte(head[2]));
             if shared == 0 && !first {
                 return;
             }
@@ -68,25 +87,25 @@ impl Table {
             };
             word.truncate(usize::from(shared));
             word.extend_from_slice(tail);
-            if !visit(word, vowel) {
+            if !visit(word, reading) {
                 return;
             }
             at = end;
         }
     }
 
-    /// Which vowel of `word` (lowercase Windows-1251) is stressed, counting
-    /// from 1, or `None` when the table does not have the word.
-    fn stressed_vowel(&self, word: &[u8]) -> Option<u8> {
+    /// How `word` (lowercase Windows-1251) is read, or `None` when the table
+    /// does not have the word.
+    fn reading(&self, word: &[u8]) -> Option<Reading> {
         let block = self
             .block_starts
             .partition_point(|&start| self.first_word(start) <= word)
             .checked_sub(1)?;
         let mut buffer = Vec::with_capacity(64);
         let mut found = None;
-        self.walk_block(self.block_starts[block], &mut buffer, |entry, vowel| {
+        self.walk_block(self.block_starts[block], &mut buffer, |entry, reading| {
             if entry == word {
-                found = Some(vowel);
+                found = Some(reading);
             }
             entry < word
         });
@@ -118,7 +137,8 @@ fn lowercase_byte(c: char) -> Option<u8> {
 }
 
 /// Puts an accent after the stressed vowel of each Russian word whose stress
-/// is known, so the voice stresses it there.
+/// is known, so the voice stresses it there, and writes ё where a word
+/// printed with е can only be read with ё.
 pub fn mark(text: &str) -> String {
     let Some(table) = table() else {
         return text.to_string();
@@ -157,24 +177,31 @@ fn mark_word(table: &Table, word: &str, bytes: &mut Vec<u8>, out: &mut String) {
         capitals += usize::from(c.is_uppercase());
         bytes.push(byte);
     }
+    // An acronym is spelled out, not stressed.
     let all_capitals = letters > 1 && capitals == letters;
-    let stressed = if all_capitals || bytes.iter().filter(|b| VOWELS.contains(b)).count() < 2 {
+    let reading = if all_capitals {
         None
     } else {
-        table.stressed_vowel(bytes)
+        table.reading(bytes)
     };
-    let Some(stressed) = stressed else {
+    let Some(reading) = reading else {
         out.push_str(word);
         return;
     };
     let mut vowels = 0;
     for (c, byte) in word.chars().zip(bytes.iter()) {
-        out.push(c);
-        if VOWELS.contains(byte) {
-            vowels += 1;
-            if vowels == stressed {
+        if !VOWELS.contains(byte) {
+            out.push(c);
+            continue;
+        }
+        vowels += 1;
+        match reading {
+            Reading::Stressed(at) if at == vowels => {
+                out.push(c);
                 out.push(ACCENT);
             }
+            Reading::Yo(at) if at == vowels => out.push(if c.is_uppercase() { 'Ё' } else { 'ё' }),
+            _ => out.push(c),
         }
     }
 }
@@ -189,27 +216,33 @@ mod tests {
             .collect()
     }
 
-    fn lookup(word: &str) -> Option<u8> {
-        table().unwrap().stressed_vowel(&cp1251(word))
+    fn lookup(word: &str) -> Option<Reading> {
+        table().unwrap().reading(&cp1251(word))
     }
 
     #[test]
     fn looks_words_up() {
-        assert_eq!(lookup("вода"), Some(2));
-        assert_eq!(lookup("город"), Some(1));
-        assert_eq!(lookup("километров"), Some(3));
-        assert_eq!(lookup("привет"), Some(2));
-        assert_eq!(lookup("москва"), Some(2));
-        assert_eq!(lookup("исследователи"), Some(2));
+        use Reading::{Stressed, Yo};
+        assert_eq!(lookup("вода"), Some(Stressed(2)));
+        assert_eq!(lookup("город"), Some(Stressed(1)));
+        assert_eq!(lookup("километров"), Some(Stressed(3)));
+        assert_eq!(lookup("привет"), Some(Stressed(2)));
+        assert_eq!(lookup("москва"), Some(Stressed(2)));
+        assert_eq!(lookup("исследователи"), Some(Stressed(2)));
+        assert_eq!(lookup("еще"), Some(Yo(2)));
+        assert_eq!(lookup("самолет"), Some(Yo(3)));
+        assert_eq!(lookup("мед"), Some(Yo(1)));
     }
 
     #[test]
     fn does_not_find_unknown_words() {
-        for word in ["замок", "уже", "ёлка", "дом", "hello", ""] {
+        // "берет" is "берёт" or "бере́т", "все" is "всё" or "все".
+        for word in ["замок", "уже", "берет", "все", "ёлка", "дом", "hello", ""]
+        {
             assert_eq!(lookup(word), None, "{word}");
         }
-        assert_eq!(table().unwrap().stressed_vowel(b"hello"), None);
-        assert_eq!(table().unwrap().stressed_vowel(b""), None);
+        assert_eq!(table().unwrap().reading(b"hello"), None);
+        assert_eq!(table().unwrap().reading(b""), None);
     }
 
     #[test]
@@ -222,6 +255,18 @@ mod tests {
             mark("Пятнадцать километров в час."),
             "Пятна\u{301}дцать киломе\u{301}тров в час."
         );
+    }
+
+    #[test]
+    fn restores_yo() {
+        assert_eq!(
+            mark("Он еще идет, а самолет уже летит. Мед и ее чай."),
+            "Он ещё идёт, а самолёт уже лети\u{301}т. Мёд и её чай."
+        );
+        assert_eq!(mark("Еще не все берет."), "Ещё не все берет.");
+        let restored = mark("Зеленый самолет.");
+        assert_eq!(restored, "Зелёный самолёт.");
+        assert_eq!(mark(&restored), restored);
     }
 
     #[test]
@@ -266,30 +311,30 @@ mod tests {
     #[test]
     fn table_is_intact() {
         let table = table().unwrap();
-        assert_eq!(table.data.len(), 14_659_327);
+        assert_eq!(table.data.len(), 14_969_676);
         let mut buffer = Vec::new();
         let mut index = 0;
         let mut found = 0;
         for &start in &table.block_starts {
-            let mut previous: Option<(Vec<u8>, u8)> = None;
-            let mut first: Option<(Vec<u8>, u8)> = None;
-            table.walk_block(start, &mut buffer, |word, vowel| {
+            let mut previous: Option<(Vec<u8>, Reading)> = None;
+            let mut first: Option<(Vec<u8>, Reading)> = None;
+            table.walk_block(start, &mut buffer, |word, reading| {
                 if first.is_none() {
-                    first = Some((word.to_vec(), vowel));
+                    first = Some((word.to_vec(), reading));
                 }
-                previous = Some((word.to_vec(), vowel));
+                previous = Some((word.to_vec(), reading));
                 if index % 997 == 0 {
-                    assert_eq!(table.stressed_vowel(word), Some(vowel));
+                    assert_eq!(table.reading(word), Some(reading));
                     found += 1;
                 }
                 index += 1;
                 true
             });
-            for (word, vowel) in [first.unwrap(), previous.unwrap()] {
-                assert_eq!(table.stressed_vowel(&word), Some(vowel));
+            for (word, reading) in [first.unwrap(), previous.unwrap()] {
+                assert_eq!(table.reading(&word), Some(reading));
             }
         }
-        assert_eq!(index, 3_086_436);
+        assert_eq!(index, 3_153_889);
         assert!(found > 3000);
     }
 

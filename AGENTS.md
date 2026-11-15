@@ -159,7 +159,7 @@ from events, not from sleeps, and leave wide margins.
 - **English for Kokoro** is phonemized in `english.rs` (misaki-rs), not by
   sherpa-onnx's lexicon lookup, which drops unknown words.
 - **Russian for Supertonic** is prepared in `russian.rs` (numbers, units,
-  abbreviations) and `stress.rs` (stress marks); the stress table is built by
+  abbreviations) and `stress.rs` (stress marks, ё); the stress table is built by
   `scripts/make-stress-dict.py`.
 - **Never panic on input.** Text, settings files, command JSON and model
   archives are untrusted: return an error message.

@@ -141,8 +141,10 @@ phonemizer Kokoro was trained with (`english.rs`); words it does not know are
 sounded out by spelling rules rather than skipped.
 For Russian with Supertonic, numbers, units and abbreviations are first
 written out as words, in the case the surrounding words call for
-(`russian.rs`), and the stressed vowel of each word a dictionary knows is
-marked so the voice stresses it there (`stress.rs`).
+(`russian.rs`). Then the stressed vowel of each word a dictionary knows is
+marked so the voice stresses it there, and "ё" is put back where the text
+prints "е" for it, as most Russian text does (`stress.rs`). Words that can be
+read two ways, such as "замок" or "все", are left as written.
 
 ## Engine and interface
 
