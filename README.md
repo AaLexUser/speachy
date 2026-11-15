@@ -50,7 +50,8 @@ release into the app's data directory and carry their own licences
 (Supertonic: OpenRAIL-M; Kokoro and KittenTTS: Apache-2.0; Pocket TTS:
 CC BY 4.0, with voice recordings from Kyutai's
 [tts-voices](https://huggingface.co/kyutai/tts-voices) under CC BY 4.0 and
-CC0).
+CC0). The Russian stress dictionary is derived from
+[RUAccent](https://huggingface.co/ruaccent/accentuator) (MIT).
 
 ## Install
 
@@ -140,7 +141,8 @@ phonemizer Kokoro was trained with (`english.rs`); words it does not know are
 sounded out by spelling rules rather than skipped.
 For Russian with Supertonic, numbers, units and abbreviations are first
 written out as words, in the case the surrounding words call for
-(`russian.rs`).
+(`russian.rs`), and the stressed vowel of each word a dictionary knows is
+marked so the voice stresses it there (`stress.rs`).
 
 ## Engine and interface
 

@@ -25,5 +25,6 @@ pub mod plan;
 pub mod russian;
 pub mod session;
 pub mod settings;
+pub mod stress;
 pub mod text;
 pub mod wav;
