@@ -86,6 +86,11 @@ pub fn set_shortcuts_suspended(app: AppHandle, state: State<AppState>, suspended
 /// is already granted.
 #[tauri::command]
 pub fn request_accessibility(app: AppHandle) -> bool {
+    // An entry from an earlier build may be in the way: see
+    // `forget_accessibility_entry`.
+    if !selection::accessibility_granted() {
+        selection::forget_accessibility_entry(&app.config().identifier);
+    }
     let granted = selection::request_accessibility();
     if !granted && cfg!(target_os = "macos") {
         use tauri_plugin_opener::OpenerExt;

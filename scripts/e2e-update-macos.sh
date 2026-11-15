@@ -4,11 +4,18 @@
 # update for it from this machine, and has an installed copy update itself.
 # Then checks that a tampered update is refused.
 #
-#   scripts/e2e-update-macos.sh
+#   scripts/e2e-update-macos.sh [KEEP_DIR]
 #
 # Rebuilds target/release/bundle/macos/Speachy.app with the throwaway key,
-# so run it after anything that needs the normal build.
+# so run it after anything that needs the normal build. With KEEP_DIR, the
+# app as it was installed and as it updated itself are left in
+# KEEP_DIR/before and KEEP_DIR/after (for scripts/e2e-permission-macos.sh).
 set -eu
+keep=${1:-}
+if [ -n "$keep" ]; then
+    mkdir -p "$keep"
+    keep=$(cd "$keep" && pwd -P)
+fi
 cd "$(dirname "$0")/.."
 # The physical path: macOS temporary directories sit behind a symlink, and
 # the updater refuses to replace an app that was started through one.
@@ -94,3 +101,10 @@ if [ "$(version_of "$app")" != "$old_version" ]; then
     exit 1
 fi
 echo "ok: the tampered update was refused and version $old_version is untouched"
+
+if [ -n "$keep" ]; then
+    rm -rf "$keep/before" "$keep/after"
+    mkdir "$keep/before" "$keep/after"
+    cp -R "$work/tampered/Speachy.app" "$keep/before/"
+    cp -R "$work/installed/Speachy.app" "$keep/after/"
+fi
