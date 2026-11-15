@@ -232,12 +232,12 @@ the **Publish release** workflow then makes it public.
 
 ## Status and known limitations
 
-This is a first version. The engine (chunking, language detection, downloads,
-the pipeline, the command surface) is covered by tests, and the whole app has
-been run end to end on Linux. The macOS-specific code — reading the selection through the
-Accessibility API and the clipboard, the menu-bar icon, the overlay pill —
-compiles for macOS but **has not yet been exercised on a Mac**; expect to
-find rough edges there first.
+The engine (chunking, language detection, downloads, the pipeline, the
+command surface) is covered by tests. The built app is also run on a Mac for
+every pull request: it is launched, the shortcut is pressed in another app in
+full screen with and without a selection, it updates itself from a test
+server, and Accessibility access is checked to survive that update. What
+those checks cannot judge is how the voices sound.
 
 - Kokoro needs a reasonably fast CPU. If synthesis is slower than playback
   you will hear pauses between chunks (the pill shows *Preparing…*).
@@ -248,4 +248,5 @@ find rough edges there first.
   selections fall back to the language set under Voices → Language.
 - The simulated <kbd>⌘</kbd><kbd>C</kbd> uses the physical key position of
   "C" on a QWERTY layout.
-- The overlay pill appears on the main display.
+- The pill follows the pointer to the display it is on; with several
+  displays this has not been tried on real hardware.

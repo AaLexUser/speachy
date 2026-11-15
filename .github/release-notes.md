@@ -3,9 +3,9 @@ Select text anywhere, press ⌃⌥S, and hear it read aloud by a text-to-speech 
 
 ## What's new
 
-- **Sound output is opened more tolerantly.** Speech could fail with "could not open the default audio output device" when Bluetooth headphones such as AirPods were the output. Speachy now tries several configurations before giving up, and retries briefly while a headset is switching modes.
-- **Clearer errors.** If the output still cannot be opened, the message names the device and the reason. The pill shows the whole of a long message when you hover over it.
-- **`speachy-cli audio`** shows the sound output device, the formats it supports and whether it can be used.
+- **Accessibility access survives updates.** macOS remembers the permission for an app's signature, and until now every release had a signature of its own, so each update had to be allowed again. From this version on all releases share one. Updating to this version from an earlier one asks one last time: press **Open settings** in Speachy and switch it on.
+- **The pill moves with the voice.** Its bars now show how loud the speech is as you hear it, instead of a fixed animation, in a plainer style.
+- **Pocket TTS**, a new English model (104 MB) with eight voices that each sound like a particular person.
 
 ## Downloads
 
@@ -34,6 +34,6 @@ Requires macOS 11 or later. The desktop app is not packaged for Linux or Windows
 
 ## Updating
 
-Speachy looks for new versions by itself and offers them under **Settings → Updates** (also: **Check for Updates…** in the menu-bar menu). After an update macOS may ask for Accessibility access again, because the app is not signed with an Apple developer certificate: remove Speachy from the Accessibility list and add it back.
+Speachy looks for new versions by itself and offers them under **Settings → Updates** (also: **Check for Updates…** in the menu-bar menu). Accessibility access carries over from one version to the next, starting with 0.1.3; an update from an earlier version asks once more.
 
 The command-line tool is a single file: unpack it and run `./speachy-cli --help`. If macOS blocks it, remove the quarantine flag the same way: `xattr -d com.apple.quarantine speachy-cli`.
