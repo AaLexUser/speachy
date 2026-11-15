@@ -110,6 +110,31 @@ jobs:
         if: env.RUNNABLE == 'true'
         run: scripts/smoke-cli.sh "target/$TARGET/release/speachy-cli"
 
+      # Every release is signed with the same certificate, so that macOS
+      # keeps the permissions a user gave the app when it updates
+      # (scripts/macos-signing.sh). Without this secret the release is still
+      # built, signed ad hoc.
+      - name: Set up the signing certificate
+        if: matrix.app
+        shell: bash
+        env:
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        run: |
+          if [ -z "$MACOS_SIGNING_IDENTITY" ]; then
+            echo "::warning::The MACOS_SIGNING_IDENTITY secret is not set: this release is signed ad hoc, so macOS will ask for Accessibility access again after an update to it."
+            exit 0
+          fi
+          umask 077
+          printf '%s\n' "$MACOS_SIGNING_IDENTITY" > "$RUNNER_TEMP/signing.pem"
+          identity=$(scripts/macos-signing.sh import "$RUNNER_TEMP/signing.pem")
+          rm "$RUNNER_TEMP/signing.pem"
+          expected=$(openssl x509 -in src-tauri/signing-certificate.pem -noout -fingerprint -sha1 | sed 's/^.*=//; s/://g')
+          if [ "$identity" != "$expected" ]; then
+            echo "::error::The MACOS_SIGNING_IDENTITY secret holds another certificate than src-tauri/signing-certificate.pem. A release signed with it would lose every user's Accessibility access."
+            exit 1
+          fi
+          echo "APPLE_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
+
       - name: Build Speachy.app and the disk image
         if: matrix.app
         shell: bash
@@ -132,6 +157,9 @@ jobs:
           echo "architecture: $got"
           [ "$got" = "$want" ]
           codesign --verify --deep --strict "$app"
+          if [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
+            codesign --verify -R="certificate leaf = H\"$APPLE_SIGNING_IDENTITY\"" "$app"
+          fi
           /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$app/Contents/Info.plist" | grep -qx "$VERSION"
 
       - name: Launch the app

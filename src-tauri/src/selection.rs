@@ -30,6 +30,17 @@ pub fn request_accessibility() -> bool {
     platform::accessibility_granted(true)
 }
 
+/// Removes the app's entry from the system's Accessibility list, so that
+/// asking again adds a fresh one.
+///
+/// macOS ties the entry to the signature of the build it was made for. An
+/// entry left by a build with another signature still shows as switched on
+/// in System Settings, but it no longer applies and switching it off and on
+/// does not repair it.
+pub fn forget_accessibility_entry(identifier: &str) {
+    platform::forget_accessibility_entry(identifier);
+}
+
 #[cfg(target_os = "macos")]
 mod platform {
     use accessibility_sys::{
@@ -62,6 +73,22 @@ mod platform {
     /// Virtual key code of the "C" key (kVK_ANSI_C).
     const KEY_C: u16 = 8;
     const HID_SYSTEM_STATE: u32 = 1;
+
+    pub fn forget_accessibility_entry(identifier: &str) {
+        let reset = std::process::Command::new("/usr/bin/tccutil")
+            .args(["reset", "Accessibility", identifier])
+            .output();
+        match reset {
+            Ok(output) if output.status.success() => {
+                log::info!("cleared the Accessibility entry for {identifier}");
+            }
+            Ok(output) => log::warn!(
+                "could not clear the Accessibility entry for {identifier}: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+            Err(err) => log::warn!("could not run tccutil: {err}"),
+        }
+    }
 
     pub fn accessibility_granted(prompt: bool) -> bool {
         unsafe {
@@ -228,6 +255,8 @@ mod platform {
     pub fn accessibility_granted(_prompt: bool) -> bool {
         true
     }
+
+    pub fn forget_accessibility_entry(_identifier: &str) {}
 
     pub fn selected_text() -> Option<String> {
         #[cfg(target_os = "linux")]

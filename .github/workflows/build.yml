@@ -63,8 +63,20 @@ jobs:
         run: cargo test -p speachy-core -p speachy-cli
       - name: Install the Tauri CLI
         run: cargo install tauri-cli --version "^2" --locked
+      # Signed as a release is, with a certificate made for this run.
+      - name: Make a signing certificate
+        run: |
+          scripts/macos-signing.sh generate "$RUNNER_TEMP/signing.pem"
+          identity=$(scripts/macos-signing.sh import "$RUNNER_TEMP/signing.pem")
+          echo "APPLE_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
       - name: Build Speachy.app and the disk image
         run: cargo tauri build --bundles app,dmg
+      - name: The app is signed with that certificate
+        run: |
+          app=target/release/bundle/macos/Speachy.app
+          codesign --verify --deep --strict "$app"
+          codesign --verify -R="certificate leaf = H\"$APPLE_SIGNING_IDENTITY\"" "$app"
+          codesign -dvv "$app" 2>&1 | grep -E "^(Authority|Identifier|CodeDirectory|Signature)"
       - name: Launch the app
         run: scripts/smoke-app.sh target/release/bundle/macos/Speachy.app/Contents/MacOS/speachy
       # Full screen in another app, select text, press the shortcut. Not yet
@@ -85,6 +97,13 @@ jobs:
           name: Speachy-macos-arm64
           path: target/release/bundle/dmg/*.dmg
           if-no-files-found: error
-      # Last, because it rebuilds the app bundle with a throwaway signing key.
+      # After everything that needs the normal build: this rebuilds the app
+      # bundle with a throwaway update key.
       - name: Update the app from a local update server
-        run: scripts/e2e-update-macos.sh
+        run: scripts/e2e-update-macos.sh "$RUNNER_TEMP/update"
+      # With the certificate gone from this machine, as it is absent from a
+      # user's.
+      - name: Accessibility access survives the update
+        run: |
+          scripts/macos-signing.sh forget
+          scripts/e2e-permission-macos.sh "$RUNNER_TEMP/update/before/Speachy.app" "$RUNNER_TEMP/update/after/Speachy.app"
