@@ -102,6 +102,17 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         app.set_activation_policy(tauri::ActivationPolicy::Accessory);
     }
     shortcuts::register_all(&handle, &settings.shortcuts);
+    // In the log because it is the first thing to check when the shortcut
+    // reads nothing, and so that scripts/e2e-permission-macos.sh can ask.
+    #[cfg(target_os = "macos")]
+    log::info!(
+        "accessibility access: {}",
+        if selection::accessibility_granted() {
+            "granted"
+        } else {
+            "not granted"
+        }
+    );
     session.preload();
     updates::start_automatic_checks(&handle);
     Ok(())

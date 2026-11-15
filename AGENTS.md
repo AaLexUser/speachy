@@ -67,7 +67,9 @@ commands, as `{"cmd": "<name>", …}`:
 
 Events (`session::Event`) are `{"event": "<kind>", "data": …}` with kinds
 `speech` (state changes, chunk ready / playing, finished), `download`,
-`settings` and `notice`.
+`settings` and `notice`. A `chunk_ready` event carries the chunk's loudness
+over time (`levels`, one value from 0 to 100 for every 40 ms of audio), which
+is what the pill's bars draw.
 
 ## Models, runtimes and voices
 
@@ -217,11 +219,13 @@ Reading the selection, global shortcuts, the menu-bar icon, the overlay pill
 and the Accessibility permission flow live in `src-tauri` and can only be
 exercised in the running app; the macOS parts only on a Mac. Keep these thin.
 
-Three scripts exercise the built app on a Mac, and run in CI on every push:
-`scripts/smoke-app.sh` (launch), `scripts/e2e-macos.sh` (another app in full
-screen, the shortcut with and without a selection, screenshots of the pill)
-and `scripts/e2e-update-macos.sh` (self-update from a local server, and
-refusal of a tampered update). Their screenshots and logs are uploaded as
+Four scripts exercise the built app on a Mac, and run in CI on every pull
+request: `scripts/smoke-app.sh` (launch), `scripts/e2e-macos.sh` (another
+app in full screen, the shortcut with and without a selection, screenshots
+of the pill), `scripts/e2e-update-macos.sh` (self-update from a local
+server, and refusal of a tampered update) and
+`scripts/e2e-permission-macos.sh` (Accessibility access given to one build
+still holds for the build it updates to). Their screenshots and logs are uploaded as
 workflow artifacts; look at them before claiming a desktop change works.
 
 **Updates** (`src-tauri/src/updates.rs`) are the shell's: the app replaces
@@ -230,6 +234,14 @@ archives are verified against `plugins.updater.pubkey`. Never commit the
 private key, and never weaken verification to make a test pass —
 `SPEACHY_UPDATE_ENDPOINT` redirects the feed for testing, but the signature
 is still checked.
+
+**Signing** (`scripts/macos-signing.sh`). macOS remembers Accessibility
+access for an app's signature, so every release is signed with the same
+self-signed certificate: the public half is `src-tauri/signing-certificate.pem`,
+the private half the `MACOS_SIGNING_IDENTITY` secret. Never commit the
+private key, and do not replace the certificate: a release signed with
+another one loses every user's access. CI builds use a certificate made for
+that run.
 
 For interface work without a Mac, the app runs on Linux: `cargo run -p
 speachy` (under `xvfb-run` where there is no display). The window scripts in

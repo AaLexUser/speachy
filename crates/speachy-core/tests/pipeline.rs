@@ -3,7 +3,9 @@
 
 use speachy_core::audio::CaptureAudio;
 use speachy_core::engine::{Audio, EngineKey, EngineProvider, SynthRequest, Synthesizer};
-use speachy_core::pipeline::{Outcome, SpeakOptions, Speaker, SpeechEvent, State};
+use speachy_core::pipeline::{
+    loudness_over_time, Outcome, SpeakOptions, Speaker, SpeechEvent, State, LEVEL_WINDOW,
+};
 use speachy_core::plan::PlannedChunk;
 use speachy_core::text::Boundary;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -451,4 +453,63 @@ fn shutdown_waits_for_synthesis_in_flight() {
 
     // With nothing running it returns at once.
     assert!(rig.speaker.shutdown(Duration::ZERO));
+}
+
+#[test]
+fn loudness_follows_the_audio() {
+    let rate = 24_000usize;
+    let tone = |amplitude: f32| (0..rate / 2).map(move |i| amplitude * (i as f32 * 0.3).sin());
+    // Half a second each of silence, quiet speech and loud speech.
+    let mut samples = vec![0.0; rate / 2];
+    samples.extend(tone(0.1));
+    samples.extend(tone(0.5));
+    let levels = loudness_over_time(&Audio {
+        samples,
+        sample_rate: rate as u32,
+    });
+    // One value for every 40 ms; the last one covers what is left over.
+    assert_eq!(levels.len(), 38);
+    assert!(levels[..12].iter().all(|l| *l == 0), "{levels:?}");
+    // A fifth as strong reads as about two fifths as loud.
+    assert!(
+        levels[13..25].iter().all(|l| (33..=43).contains(l)),
+        "{levels:?}"
+    );
+    assert!(levels[26..37].iter().all(|l| *l >= 97), "{levels:?}");
+
+    let silence = Audio {
+        samples: vec![0.0; rate],
+        sample_rate: rate as u32,
+    };
+    assert_eq!(loudness_over_time(&silence), vec![0; 25]);
+    let nothing = Audio {
+        samples: Vec::new(),
+        sample_rate: rate as u32,
+    };
+    assert!(loudness_over_time(&nothing).is_empty());
+}
+
+#[test]
+fn every_chunk_reports_its_loudness_over_time() {
+    let rig = rig(0.5, 0, f32::INFINITY);
+    let session = rig.speaker.speak(plan("chunk", 3), opts(20.0));
+    let events = rig.until_finished(session);
+    let mut reported = 0;
+    for event in &events {
+        if let SpeechEvent::ChunkReady {
+            audio_secs, levels, ..
+        } = event
+        {
+            reported += 1;
+            let windows = (audio_secs / LEVEL_WINDOW.as_secs_f32()).ceil() as usize;
+            assert_eq!(levels.len(), windows, "{audio_secs} s of audio");
+            // The fake engine's audio is equally loud throughout, up to
+            // the fades at its edges.
+            assert!(
+                levels[1..windows - 1].iter().all(|l| *l >= 95),
+                "{levels:?}"
+            );
+        }
+    }
+    assert_eq!(reported, 3);
 }

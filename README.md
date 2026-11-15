@@ -127,8 +127,10 @@ Closing the window keeps Speachy running in the menu bar; quit from the menu
 bar icon. *Launch at login* and *Start in the menu bar* are in Settings.
 
 > An app you build yourself is ad-hoc signed, and macOS ties the Accessibility
-> permission to the signature. After rebuilding you may have to remove and
-> re-add Speachy in the Accessibility list.
+> permission to the signature, so a rebuilt app has to be allowed again:
+> press *Open settings* in the app's banner and switch Speachy on. To keep
+> access across your own builds, sign them with a certificate of your own
+> (`scripts/macos-signing.sh`).
 
 ## How the pipeline works
 
@@ -245,8 +247,16 @@ built, but installed apps cannot update to them. Keep that key safe: apps
 only accept updates signed with it, so losing it means users have to
 reinstall by hand.
 
-Because the app is not signed with an Apple developer certificate, macOS
-may ask for Accessibility access again after an update.
+macOS ties a permission such as Accessibility to the signature of the app
+it was given to. Releases are therefore all signed with one certificate
+(`src-tauri/signing-certificate.pem`; its private key is the repository
+secret `MACOS_SIGNING_IDENTITY`), so access given once carries over to
+every later update. Like the update key, that key must be kept: a release
+signed with another one, or built without the secret, makes macOS ask every
+user again. The certificate is self-signed, not issued by Apple, so it
+does not change the *Open Anyway* step on first launch. Versions up to
+0.1.2 were signed without it; updating from one of them asks for access one
+last time.
 
 ### Releasing
 

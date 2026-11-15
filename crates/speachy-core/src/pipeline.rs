@@ -78,6 +78,9 @@ pub enum SpeechEvent {
         index: usize,
         audio_secs: f32,
         synth_secs: f32,
+        /// How loud the chunk is over its length, for drawing it: see
+        /// [`loudness_over_time`].
+        levels: Vec<u8>,
     },
     /// Chunk `index` started playing.
     ChunkPlaying {
@@ -546,6 +549,7 @@ fn run_session(
                         index,
                         audio_secs: audio.seconds(),
                         synth_secs,
+                        levels: loudness_over_time(&audio),
                     },
                 );
                 waiting.insert(index, raw_secs);
@@ -615,6 +619,33 @@ fn pause_after(chunk: &PlannedChunk, speed: f32) -> Duration {
         Boundary::End => 150.0,
     };
     Duration::from_secs_f32(millis / 1000.0 / speed.max(0.25))
+}
+
+/// Length of audio behind each value of [`loudness_over_time`].
+pub const LEVEL_WINDOW: Duration = Duration::from_millis(40);
+
+/// The loudness of `audio` over time, for a display that moves with the
+/// speech: one value for every [`LEVEL_WINDOW`] of audio, from 0 (silence)
+/// to 100 (the loudest moment of this audio).
+///
+/// Loudness is relative to the audio itself, so a quiet voice moves a
+/// display as much as a loud one, and it is compressed the way hearing is:
+/// a sound half as strong counts for clearly more than half.
+pub fn loudness_over_time(audio: &Audio) -> Vec<u8> {
+    let window = ((audio.sample_rate as f32 * LEVEL_WINDOW.as_secs_f32()) as usize).max(1);
+    let strength: Vec<f32> = audio
+        .samples
+        .chunks(window)
+        .map(|part| (part.iter().map(|s| s * s).sum::<f32>() / part.len() as f32).sqrt())
+        .collect();
+    let loudest = strength.iter().fold(0f32, |m, s| m.max(*s));
+    if loudest < 1e-6 {
+        return vec![0; strength.len()];
+    }
+    strength
+        .iter()
+        .map(|s| ((s / loudest).powf(0.6) * 100.0).round() as u8)
+        .collect()
 }
 
 /// Trims leading and trailing silence, which varies from chunk to chunk, so

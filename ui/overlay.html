@@ -24,43 +24,36 @@
         display: flex;
         align-items: center;
         gap: 10px;
-        padding: 0 8px 0 14px;
+        padding: 0 7px 0 15px;
         border-radius: 21px;
-        background: rgb(22 24 29 / 0.94);
-        border: 1px solid rgb(255 255 255 / 0.12);
+        background: rgb(17 17 19 / 0.94);
+        border: 1px solid rgb(255 255 255 / 0.09);
         color: #f2f2f3;
         box-sizing: border-box;
       }
+      /* The bars are drawn by overlay.js from the loudness of the speech
+         being heard. One colour, thin, evenly spaced: they should read as a
+         voice at a glance and otherwise stay out of the way. */
       .bars {
         display: flex;
         align-items: center;
         gap: 2.5px;
-        height: 20px;
+        height: 18px;
         flex: none;
+        transition: opacity 0.25s ease;
       }
       .bars i {
-        width: 3px;
-        height: 100%;
+        width: 2.5px;
+        height: 2.5px;
         border-radius: 2px;
-        background: linear-gradient(#ffbe50, #ff7056);
-        transform: scaleY(0.25);
-        transform-origin: center;
+        background: #fff;
+        will-change: height;
       }
-      .pill[data-state="speaking"] .bars i {
-        animation: wave 0.9s ease-in-out infinite;
-      }
-      .pill[data-state="loading"] .bars i,
-      .pill[data-state="preparing"] .bars i {
-        animation: wave 1.6s ease-in-out infinite;
+      .pill[data-state="idle"] .bars { opacity: 0.3; }
+      .pill[data-state="paused"] .bars { opacity: 0.4; }
+      .pill[data-state="loading"] .bars,
+      .pill[data-state="preparing"] .bars {
         opacity: 0.55;
-      }
-      .bars i:nth-child(2) { animation-delay: -0.15s; }
-      .bars i:nth-child(3) { animation-delay: -0.3s; }
-      .bars i:nth-child(4) { animation-delay: -0.45s; }
-      .bars i:nth-child(5) { animation-delay: -0.6s; }
-      @keyframes wave {
-        0%, 100% { transform: scaleY(0.25); }
-        50% { transform: scaleY(1); }
       }
       #label {
         flex: 1;
@@ -78,21 +71,20 @@
         padding: 0;
         border: 0;
         border-radius: 50%;
-        background: rgb(255 255 255 / 0.1);
-        color: #fff;
+        background: none;
+        color: rgb(255 255 255 / 0.62);
         flex: none;
+        transition: background 0.12s ease, color 0.12s ease;
       }
-      button:hover { background: rgb(255 255 255 / 0.22); }
-      button svg { width: 12px; height: 12px; fill: currentColor; }
+      button:hover { background: rgb(255 255 255 / 0.12); color: #fff; }
+      button svg { width: 11px; height: 11px; fill: currentColor; }
+      #stop { margin-left: -8px; }
       .pill[data-state="idle"] button { display: none; }
-      @media (prefers-reduced-motion: reduce) {
-        .bars i { animation: none !important; transform: scaleY(0.6); }
-      }
     </style>
   </head>
   <body>
     <div class="pill" id="pill" data-state="idle">
-      <div class="bars"><i></i><i></i><i></i><i></i><i></i></div>
+      <div class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
       <span id="label">Speachy</span>
       <button id="pause" title="Pause" aria-label="Pause">
         <svg viewBox="0 0 12 12" id="pause-icon"><path d="M2.5 1.5h2.4v9H2.5zm4.6 0h2.4v9H7.1z" /></svg>
