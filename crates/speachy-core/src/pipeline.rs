@@ -395,6 +395,7 @@ fn synthesis_worker(
         let request = SynthRequest {
             text: &chunk.text,
             sid: chunk.sid,
+            voice: &chunk.voice_id,
             speed,
             lang: &chunk.lang,
         };
@@ -587,6 +588,8 @@ fn run_session(
         (Outcome::Completed, Some(message)) if !ever_played => {
             inner.finish(id, Outcome::Failed, Some(message))
         }
+        // Part of the text was read; say what became of the rest.
+        (Outcome::Completed, message) => inner.finish(id, Outcome::Completed, message),
         (outcome, _) => inner.finish(id, outcome, None),
     }
 }

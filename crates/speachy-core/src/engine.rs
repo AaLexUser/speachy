@@ -1,6 +1,8 @@
-//! Speech synthesis through sherpa-onnx.
+//! Speech synthesis: what a synthesizer is, the one that runs models inside
+//! Speachy through sherpa-onnx, and the cache that hands out a synthesizer
+//! for whichever runtime a model uses.
 
-use crate::catalog::{Family, ModelInfo};
+use crate::catalog::{Catalog, Family, ModelInfo, Runtime};
 use crate::english::Phonemizer;
 use anyhow::{anyhow, bail, Context, Result};
 use sherpa_onnx::{
@@ -31,6 +33,8 @@ pub struct SynthRequest<'a> {
     pub text: &'a str,
     /// Speaker id within the model.
     pub sid: i32,
+    /// The voice's id in the catalog.
+    pub voice: &'a str,
     /// 1.0 is the model's natural pace.
     pub speed: f32,
     /// ISO 639-1 language of `text`.
@@ -66,9 +70,14 @@ pub struct SherpaEngine {
     family: Family,
     /// English phonemizer, for the families that are given phonemes.
     phonemizer: Option<Phonemizer>,
-    /// Recordings of the voices, by speaker id, for the families that
-    /// imitate one.
-    recordings: HashMap<i32, Recording>,
+    model_id: String,
+    /// The model's directory.
+    dir: PathBuf,
+    /// Where the model's voices are looked up when one is asked for, so a
+    /// voice the user has just added works without reloading the model.
+    catalog: Arc<Catalog>,
+    /// Recordings of voices, by file, for the families that imitate one.
+    recordings: Mutex<HashMap<PathBuf, Arc<Recording>>>,
 }
 
 /// A recording of a voice for the model to imitate.
@@ -145,7 +154,11 @@ impl SherpaEngine {
         dir: &Path,
         variant: Option<&str>,
         threads: i32,
+        catalog: Arc<Catalog>,
     ) -> Result<Self> {
+        let family = model
+            .family()
+            .ok_or_else(|| anyhow!("{} does not run inside Speachy", model.name))?;
         let file = |names: &[&str]| existing(dir, names);
         let mut config = OfflineTtsConfig {
             model: OfflineTtsModelConfig {
@@ -156,7 +169,7 @@ impl SherpaEngine {
             max_num_sentences: 1,
             ..Default::default()
         };
-        match model.family {
+        match family {
             Family::Supertonic => {
                 config.model.supertonic = OfflineTtsSupertonicModelConfig {
                     duration_predictor: Some(file(&[
@@ -224,7 +237,7 @@ impl SherpaEngine {
                     token_scores_json: Some(file(&["token_scores.json"])?),
                     // What the model makes of a recording is kept, so each
                     // voice is analysed once.
-                    voice_embedding_cache_capacity: model.voices.len() as i32,
+                    voice_embedding_cache_capacity: model.voices.len().max(16) as i32,
                 };
             }
         }
@@ -235,22 +248,39 @@ impl SherpaEngine {
                 dir.display()
             )
         })?;
-        let mut recordings = HashMap::new();
-        for voice in &model.voices {
-            let Some(name) = &voice.reference else {
-                continue;
-            };
-            let recording = Recording::read(&file(&[name])?, tts.sample_rate())?;
-            recordings.insert(voice.sid, recording);
-        }
-        let phonemizer =
-            (model.family == Family::Kokoro).then(|| Phonemizer::new(variant == Some("gb")));
+        let phonemizer = (family == Family::Kokoro).then(|| Phonemizer::new(variant == Some("gb")));
         Ok(Self {
             tts,
-            family: model.family,
+            family,
             phonemizer,
-            recordings,
+            model_id: model.id.clone(),
+            dir: dir.to_path_buf(),
+            catalog,
+            recordings: Mutex::default(),
         })
+    }
+
+    /// The recording of `voice`, read once.
+    fn recording(&self, voice: &str) -> Result<Arc<Recording>> {
+        let model = self.catalog.find(&self.model_id);
+        let file = model
+            .as_ref()
+            .and_then(|m| m.voice(voice))
+            .and_then(|v| v.reference.as_ref())
+            .ok_or_else(|| anyhow!("the voice {voice} has no recording to imitate"))?;
+        // A voice of the model sits in its directory; one the user added
+        // gives the whole path.
+        let path = self.dir.join(file);
+        let mut recordings = self.recordings.lock().unwrap();
+        if let Some(recording) = recordings.get(&path) {
+            return Ok(recording.clone());
+        }
+        let recording = Arc::new(Recording::read(
+            &path.to_string_lossy(),
+            self.tts.sample_rate(),
+        )?);
+        recordings.insert(path, recording.clone());
+        Ok(recording)
     }
 
     pub fn sample_rate(&self) -> u32 {
@@ -298,10 +328,7 @@ impl Synthesizer for SherpaEngine {
             ..Default::default()
         };
         if self.family == Family::Pocket {
-            let recording = self
-                .recordings
-                .get(&req.sid)
-                .ok_or_else(|| anyhow!("this model has no voice {}", req.sid))?;
+            let recording = self.recording(req.voice)?;
             config.reference_audio = Some(recording.samples.clone());
             config.reference_sample_rate = recording.sample_rate;
             config.num_steps = POCKET_STEPS;
@@ -329,18 +356,20 @@ impl Synthesizer for SherpaEngine {
 /// Keeps the most recently used engines loaded, so switching between a
 /// couple of voices does not reload weights every time.
 pub struct EngineCache {
+    catalog: Arc<Catalog>,
     models_dir: PathBuf,
     threads: i32,
     capacity: usize,
     /// Most recently used last.
-    loaded: Mutex<Vec<(EngineKey, Arc<SherpaEngine>)>>,
+    loaded: Mutex<Vec<(EngineKey, Arc<dyn Synthesizer>)>>,
     /// Serializes loading, so two callers never load the same model twice.
     loading: Mutex<()>,
 }
 
 impl EngineCache {
-    pub fn new(models_dir: PathBuf, threads: i32, capacity: usize) -> Self {
+    pub fn new(catalog: Arc<Catalog>, models_dir: PathBuf, threads: i32, capacity: usize) -> Self {
         Self {
+            catalog,
             models_dir,
             threads,
             capacity: capacity.max(1),
@@ -349,7 +378,7 @@ impl EngineCache {
         }
     }
 
-    fn cached(&self, key: &EngineKey) -> Option<Arc<SherpaEngine>> {
+    fn cached(&self, key: &EngineKey) -> Option<Arc<dyn Synthesizer>> {
         let mut loaded = self.loaded.lock().unwrap();
         let pos = loaded.iter().position(|(k, _)| k == key)?;
         let entry = loaded.remove(pos);
@@ -383,16 +412,25 @@ impl EngineProvider for EngineCache {
         if let Some(engine) = self.cached(key) {
             return Ok(engine);
         }
-        let model = crate::catalog::find(&key.model_id)
+        let model = self
+            .catalog
+            .find(&key.model_id)
             .ok_or_else(|| anyhow!("unknown model {}", key.model_id))?;
-        let dir = self.models_dir.join(&model.id);
         let started = std::time::Instant::now();
-        let engine = Arc::new(SherpaEngine::load(
-            model,
-            &dir,
-            key.variant.as_deref(),
-            self.threads,
-        )?);
+        let engine: Arc<dyn Synthesizer> = match &model.runtime {
+            Runtime::Sherpa { .. } => Arc::new(SherpaEngine::load(
+                &model,
+                &self.models_dir.join(&model.id),
+                key.variant.as_deref(),
+                self.threads,
+                self.catalog.clone(),
+            )?),
+            Runtime::Server(server) => Arc::new(crate::server::ServerEngine::new(
+                &model.id,
+                server,
+                self.catalog.clone(),
+            )),
+        };
         log::info!(
             "loaded {} ({:?}) in {:.2}s",
             model.id,

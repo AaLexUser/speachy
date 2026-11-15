@@ -9,7 +9,7 @@
 //!   .downloads/              partial downloads, kept for resuming
 //! ```
 
-use crate::catalog::{self, ModelInfo};
+use crate::catalog::{ModelInfo, Runtime};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Serialize;
 use std::fs::{self, File, OpenOptions};
@@ -61,14 +61,6 @@ impl ModelManager {
         self.model_dir(id).join(MARKER).is_file()
     }
 
-    /// Installed models, in catalog order.
-    pub fn installed(&self) -> Vec<&'static ModelInfo> {
-        catalog::catalog()
-            .iter()
-            .filter(|m| self.is_installed(&m.id))
-            .collect()
-    }
-
     /// Bytes of a partial download waiting to be resumed.
     pub fn partial_bytes(&self, model: &ModelInfo) -> u64 {
         fs::metadata(self.part_path(&model.id)).map_or(0, |m| m.len())
@@ -90,16 +82,28 @@ impl ModelManager {
         cancel: &AtomicBool,
         progress: &dyn Fn(Progress),
     ) -> Result<()> {
+        let Runtime::Sherpa {
+            archive_url,
+            archive_dir,
+            extra_files,
+            ..
+        } = &model.runtime
+        else {
+            bail!(
+                "{} runs in a speech server; there is nothing to download",
+                model.name
+            );
+        };
         if self.is_installed(&model.id) {
             return Ok(());
         }
         fs::create_dir_all(self.downloads_dir())?;
-        let extras: u64 = model.extra_files.iter().map(|f| f.size_bytes).sum();
+        let extras: u64 = extra_files.iter().map(|f| f.size_bytes).sum();
         let total = model.size_bytes;
         let archive_total = total.saturating_sub(extras);
 
         let part = self.part_path(&model.id);
-        download(&model.archive_url, &part, cancel, &|done, len| {
+        download(archive_url, &part, cancel, &|done, len| {
             let total = len.map_or(total, |len| len + extras);
             progress(Progress {
                 phase: Phase::Downloading,
@@ -137,12 +141,12 @@ impl ModelManager {
                 .map_err(unwrap_cancelled)
                 .context("unpacking the model archive")?;
 
-            let unpacked = staging.join(&model.archive_dir);
+            let unpacked = staging.join(archive_dir);
             if !unpacked.is_dir() {
-                bail!("the archive does not contain {}", model.archive_dir);
+                bail!("the archive does not contain {archive_dir}");
             }
             let mut done = archive_total;
-            for extra in &model.extra_files {
+            for extra in extra_files {
                 let target = unpacked.join(&extra.filename);
                 let base = done;
                 download(&extra.url, &target, cancel, &|bytes, _| {
@@ -157,7 +161,7 @@ impl ModelManager {
             }
             fs::write(
                 unpacked.join(MARKER),
-                serde_json::json!({ "id": model.id, "archive": model.archive_url }).to_string(),
+                serde_json::json!({ "id": model.id, "archive": archive_url }).to_string(),
             )?;
             let target = self.model_dir(&model.id);
             let _ = fs::remove_dir_all(&target);
@@ -180,7 +184,8 @@ impl ModelManager {
 
     /// Removes an installed model and any partial download of it.
     pub fn remove(&self, id: &str) -> Result<()> {
-        if catalog::find(id).is_none() {
+        // The id becomes a path under the models directory.
+        if id.is_empty() || id.starts_with('.') || id.contains(['/', '\\']) {
             bail!("unknown model {id}");
         }
         let _ = fs::remove_file(self.part_path(id));
@@ -395,11 +400,24 @@ mod tests {
     }
 
     fn test_model(archive_url: String, extra_url: Option<String>) -> ModelInfo {
-        let mut model = catalog::find("kitten-nano-v0.2").unwrap().clone();
-        model.archive_url = archive_url;
-        model.archive_dir = "kitten".into();
-        model.extra_files.retain(|_| extra_url.is_some());
-        if let (Some(url), Some(extra)) = (extra_url, model.extra_files.first_mut()) {
+        let mut model = crate::catalog::builtin()
+            .iter()
+            .find(|m| m.id == "kitten-nano-v0.2")
+            .unwrap()
+            .clone();
+        let Runtime::Sherpa {
+            archive_url: url,
+            archive_dir,
+            extra_files,
+            ..
+        } = &mut model.runtime
+        else {
+            unreachable!()
+        };
+        *url = archive_url;
+        *archive_dir = "kitten".into();
+        extra_files.retain(|_| extra_url.is_some());
+        if let (Some(url), Some(extra)) = (extra_url, extra_files.first_mut()) {
             extra.url = url;
         }
         model
@@ -462,7 +480,11 @@ mod tests {
 
         manager.remove(&model.id).unwrap();
         assert!(!manager.is_installed(&model.id));
-        assert!(manager.remove("no-such-model").is_err());
+        // Which models exist is the catalog's business; an id that would
+        // lead out of the models directory is refused all the same.
+        assert!(manager.remove("no-such-model").is_ok());
+        assert!(manager.remove("../elsewhere").is_err());
+        assert!(manager.remove(".downloads").is_err());
     }
 
     #[test]

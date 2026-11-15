@@ -400,7 +400,10 @@ fn a_failing_chunk_is_skipped() {
     let session = rig.speaker.speak(chunks, opts(20.0));
     let events = rig.until_finished(session);
     assert_eq!(playing_order(&events), [0, 2]);
-    assert_eq!(outcome(&events, session), Some((Outcome::Completed, None)));
+    // The rest was read, and the listener is told what was left out.
+    let (outcome, message) = outcome(&events, session).unwrap();
+    assert_eq!(outcome, Outcome::Completed);
+    assert!(message.unwrap().contains("cannot pronounce bad-1"));
 }
 
 #[test]

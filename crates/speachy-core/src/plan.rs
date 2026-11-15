@@ -201,7 +201,12 @@ pub fn voice_for(settings: &Settings, installed: &[&ModelInfo], lang: &str) -> O
 #[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
-    use crate::catalog::find;
+    use crate::catalog::builtin;
+
+    /// A built-in model.
+    fn find(id: &str) -> Option<&'static ModelInfo> {
+        builtin().iter().find(|m| m.id == id)
+    }
 
     const EN: &str =
         "The quick brown fox jumps over the lazy dog and keeps running through the forest.";

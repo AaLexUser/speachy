@@ -874,3 +874,45 @@ input[type="range"] {
     transition: none !important;
   }
 }
+
+/* Speech server form */
+
+input[type="text"] {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+input[type="text"]:focus {
+  outline: 2px solid color-mix(in srgb, var(--accent), transparent 55%);
+  outline-offset: 0;
+  border-color: var(--accent);
+}
+
+.server .field {
+  margin-top: 10px;
+}
+
+.server .field > span {
+  flex: none;
+  width: 112px;
+  color: var(--muted);
+}
+
+.server .field select {
+  flex: 1;
+  min-width: 0;
+}
+
+.server .card-head {
+  display: block;
+}
+
+.server .card-head p {
+  margin-top: 4px;
+}

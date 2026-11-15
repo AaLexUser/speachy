@@ -1,13 +1,14 @@
 //! The engine's front door.
 //!
 //! A [`Session`] owns everything that is not user interface: settings, the
-//! installed models, loaded engines and the speech pipeline. Every front
+//! catalog of models, installed files, loaded engines and the speech
+//! pipeline. Every front
 //! end drives it the same way — the desktop app, the command-line tool and
 //! the JSON control channel all send [`Command`]s and receive [`Event`]s —
 //! so anything the app can do can be scripted and tested without a window.
 
 use crate::audio::AudioBackend;
-use crate::catalog::{self, ModelInfo};
+use crate::catalog::{self, Catalog, ModelInfo, VoiceInfo};
 use crate::engine::{EngineCache, EngineProvider};
 use crate::lang::{self, Detected};
 use crate::models::{is_cancelled, ModelManager, Progress};
@@ -27,6 +28,10 @@ use std::time::{Duration, Instant};
 pub struct Paths {
     pub models_dir: PathBuf,
     pub settings_file: PathBuf,
+    /// The models and voices the user added (see [`Catalog`]).
+    pub catalog_file: PathBuf,
+    /// Recordings of the voices the user added.
+    pub voices_dir: PathBuf,
 }
 
 impl Paths {
@@ -47,6 +52,8 @@ impl Paths {
         Self {
             models_dir: data.join("models"),
             settings_file: config.join("settings.json"),
+            catalog_file: config.join("models.json"),
+            voices_dir: data.join("voices"),
         }
     }
 
@@ -55,6 +62,8 @@ impl Paths {
         Self {
             models_dir: root.join("models"),
             settings_file: root.join("settings.json"),
+            catalog_file: root.join("models.json"),
+            voices_dir: root.join("voices"),
         }
     }
 }
@@ -63,7 +72,8 @@ impl Paths {
 #[derive(Debug, Clone, Serialize)]
 pub struct ModelView {
     #[serde(flatten)]
-    pub info: &'static ModelInfo,
+    pub info: ModelInfo,
+    /// Ready to speak: its files are here, or it runs in a server.
     pub installed: bool,
     /// Bytes of an interrupted download that will be resumed.
     pub partial_bytes: u64,
@@ -79,7 +89,7 @@ pub struct Snapshot {
     pub settings: Settings,
     pub speech_state: State,
     /// Display names of language codes.
-    pub languages: BTreeMap<String, &'static str>,
+    pub languages: BTreeMap<String, String>,
     pub paths: Paths,
     pub version: &'static str,
 }
@@ -122,8 +132,37 @@ pub enum Command {
     CancelInstall {
         id: String,
     },
+    /// Remove a model's files; a model the user added is forgotten too.
     RemoveModel {
         id: String,
+    },
+    /// Add a model of the user's own, or replace the one of the same id.
+    /// `model` is a model definition (see [`ModelInfo`]); most often one
+    /// that runs in a speech server.
+    AddModel {
+        model: Value,
+    },
+    /// Ask the speech server at `endpoint` which models it has and, for
+    /// `model`, which voices.
+    ServerOffer {
+        endpoint: String,
+        #[serde(default)]
+        model: Option<String>,
+    },
+    /// Add a voice to a model that imitates recordings. `recording` is a
+    /// WAV file of the voice; `text` is what is said in it, for the models
+    /// that need to know.
+    AddVoice {
+        model: String,
+        name: String,
+        recording: PathBuf,
+        #[serde(default)]
+        text: Option<String>,
+    },
+    /// Remove a voice the user added.
+    RemoveVoice {
+        model: String,
+        voice: String,
     },
     /// Change settings; `patch` holds only the fields to change.
     UpdateSettings {
@@ -171,6 +210,7 @@ type Listener = Arc<dyn Fn(&Event) + Send + Sync>;
 struct Inner {
     paths: Paths,
     settings: RwLock<Settings>,
+    catalog: Arc<Catalog>,
     models: ModelManager,
     engines: Arc<dyn EngineProvider>,
     speaker: Speaker,
@@ -197,8 +237,14 @@ impl Session {
         listener: impl Fn(&Event) + Send + Sync + 'static,
     ) -> Self {
         let threads = Settings::load(&paths.settings_file).effective_threads();
-        let engines = Arc::new(EngineCache::new(paths.models_dir.clone(), threads, 2));
-        Self::with_engines(paths, engines, audio, listener)
+        let catalog = Arc::new(Catalog::open(&paths.catalog_file));
+        let engines = Arc::new(EngineCache::new(
+            catalog.clone(),
+            paths.models_dir.clone(),
+            threads,
+            2,
+        ));
+        Self::assemble(paths, catalog, engines, audio, listener)
     }
 
     /// Like [`Session::open`], with the synthesizers supplied by the caller
@@ -209,23 +255,46 @@ impl Session {
         audio: Arc<dyn AudioBackend>,
         listener: impl Fn(&Event) + Send + Sync + 'static,
     ) -> Self {
+        let catalog = Arc::new(Catalog::open(&paths.catalog_file));
+        Self::assemble(paths, catalog, engines, audio, listener)
+    }
+
+    fn assemble(
+        paths: Paths,
+        catalog: Arc<Catalog>,
+        engines: Arc<dyn EngineProvider>,
+        audio: Arc<dyn AudioBackend>,
+        listener: impl Fn(&Event) + Send + Sync + 'static,
+    ) -> Self {
         let listener: Listener = Arc::new(listener);
         let speech_listener = listener.clone();
         let speaker = Speaker::new(engines.clone(), audio, move |event| {
             speech_listener(&Event::Speech(event.clone()));
-            if let SpeechEvent::Finished {
-                outcome: Outcome::Failed,
-                message,
-                ..
-            } = event
-            {
-                let message = message.clone().unwrap_or_else(|| "Speech failed".into());
-                speech_listener(&Event::Notice(message));
+            match event {
+                SpeechEvent::Finished {
+                    outcome: Outcome::Failed,
+                    message,
+                    ..
+                } => {
+                    let message = message.clone().unwrap_or_else(|| "Speech failed".into());
+                    speech_listener(&Event::Notice(message));
+                }
+                // Read to the end, but not all of it.
+                SpeechEvent::Finished {
+                    outcome: Outcome::Completed,
+                    message: Some(message),
+                    ..
+                } => {
+                    let notice = format!("Part of the text was left out: {message}");
+                    speech_listener(&Event::Notice(notice));
+                }
+                _ => {}
             }
         });
         Self {
             inner: Arc::new(Inner {
                 settings: RwLock::new(Settings::load(&paths.settings_file)),
+                catalog,
                 models: ModelManager::new(paths.models_dir.clone()),
                 paths,
                 engines,
@@ -246,8 +315,21 @@ impl Session {
         self.inner.settings.read().unwrap().clone()
     }
 
-    pub fn installed(&self) -> Vec<&'static ModelInfo> {
-        self.inner.models.installed()
+    /// Whether `model` can speak now: its files are installed, or it runs
+    /// in a server.
+    fn is_ready(&self, model: &ModelInfo) -> bool {
+        !model.needs_download() || self.inner.models.is_installed(&model.id)
+    }
+
+    /// The models that can speak now, in catalog order.
+    pub fn installed(&self) -> Vec<Arc<ModelInfo>> {
+        let mut models = self.inner.catalog.models();
+        models.retain(|m| self.is_ready(m));
+        models
+    }
+
+    pub fn catalog(&self) -> &Arc<Catalog> {
+        &self.inner.catalog
     }
 
     pub fn speech_state(&self) -> State {
@@ -265,20 +347,21 @@ impl Session {
     pub fn snapshot(&self) -> Snapshot {
         let inner = &self.inner;
         let downloads = inner.downloads.lock().unwrap();
-        let models = catalog::catalog()
+        let all = inner.catalog.models();
+        let languages = all
+            .iter()
+            .flat_map(|m| m.languages.iter())
+            .map(|code| (code.clone(), language_label(code)))
+            .collect();
+        let models = all
             .iter()
             .map(|info| ModelView {
-                info,
-                installed: inner.models.is_installed(&info.id),
+                installed: self.is_ready(info),
                 partial_bytes: inner.models.partial_bytes(info),
                 installing: downloads.contains_key(&info.id),
                 progress: downloads.get(&info.id).and_then(|d| d.progress),
+                info: ModelInfo::clone(info),
             })
-            .collect();
-        let languages = catalog::catalog()
-            .iter()
-            .flat_map(|m| m.languages.iter())
-            .map(|code| (code.clone(), catalog::language_name(code)))
             .collect();
         Snapshot {
             models,
@@ -294,7 +377,17 @@ impl Session {
     /// and the outcome are reported as [`Event::Download`]; with `wait`
     /// the outcome is also returned.
     pub fn install_model(&self, id: &str, wait: bool) -> Result<(), String> {
-        let model = catalog::find(id).ok_or_else(|| format!("unknown model {id}"))?;
+        let model = self
+            .inner
+            .catalog
+            .find(id)
+            .ok_or_else(|| format!("unknown model {id}"))?;
+        if !model.needs_download() {
+            return Err(format!(
+                "{} runs in a speech server; there is nothing to download",
+                model.name
+            ));
+        }
         let cancel = Arc::new(AtomicBool::new(false));
         {
             let mut downloads = self.inner.downloads.lock().unwrap();
@@ -314,7 +407,7 @@ impl Session {
             );
         }
         let session = self.clone();
-        let run = move || session.run_install(model, &cancel);
+        let run = move || session.run_install(&model, &cancel);
         if wait {
             run()
         } else {
@@ -326,7 +419,7 @@ impl Session {
         }
     }
 
-    fn run_install(&self, model: &'static ModelInfo, cancel: &AtomicBool) -> Result<(), String> {
+    fn run_install(&self, model: &ModelInfo, cancel: &AtomicBool) -> Result<(), String> {
         let inner = &self.inner;
         let event = |progress, finished, error| {
             Event::Download(DownloadEvent {
@@ -354,29 +447,7 @@ impl Session {
             Err(err) => Err(format!("{err:#}")),
         };
         if outcome.is_ok() {
-            // The first model installed becomes the default voice.
-            let changed = {
-                let mut settings = inner.settings.write().unwrap();
-                let has_default = settings
-                    .default_voice
-                    .as_ref()
-                    .is_some_and(|v| inner.models.is_installed(&v.model_id));
-                if has_default {
-                    None
-                } else {
-                    settings.default_voice = Some(VoiceRef {
-                        model_id: model.id.clone(),
-                        voice_id: model.default_voice.clone(),
-                    });
-                    if let Err(err) = settings.save(&inner.paths.settings_file) {
-                        log::warn!("could not save settings: {err}");
-                    }
-                    Some(settings.clone())
-                }
-            };
-            if let Some(settings) = changed {
-                self.emit(Event::Settings(settings));
-            }
+            self.adopt_as_default(model);
             self.preload();
         }
         // A cancellation is the user's doing, not an error to report.
@@ -386,6 +457,35 @@ impl Session {
             .filter(|_| !cancel.load(Ordering::Relaxed));
         self.emit(event(None, true, error));
         outcome
+    }
+
+    /// Makes `model`'s default voice the default voice, if there is none:
+    /// the first model that can speak is the one to speak with.
+    fn adopt_as_default(&self, model: &ModelInfo) {
+        let inner = &self.inner;
+        let ready: Vec<String> = self.installed().iter().map(|m| m.id.clone()).collect();
+        let changed = {
+            let mut settings = inner.settings.write().unwrap();
+            let has_default = settings
+                .default_voice
+                .as_ref()
+                .is_some_and(|v| ready.contains(&v.model_id));
+            if has_default {
+                None
+            } else {
+                settings.default_voice = Some(VoiceRef {
+                    model_id: model.id.clone(),
+                    voice_id: model.default_voice.clone(),
+                });
+                if let Err(err) = settings.save(&inner.paths.settings_file) {
+                    log::warn!("could not save settings: {err}");
+                }
+                Some(settings.clone())
+            }
+        };
+        if let Some(settings) = changed {
+            self.emit(Event::Settings(settings));
+        }
     }
 
     /// Asks a running install to stop. Returns whether one was running.
@@ -399,8 +499,14 @@ impl Session {
         }
     }
 
+    /// Removes a model's files. A model the user added is forgotten too,
+    /// with the voices added to it.
     pub fn remove_model(&self, id: &str) -> Result<(), String> {
         let inner = &self.inner;
+        let model = inner
+            .catalog
+            .find(id)
+            .ok_or_else(|| format!("unknown model {id}"))?;
         if inner.downloads.lock().unwrap().contains_key(id) {
             return Err("this model is being installed".into());
         }
@@ -408,19 +514,28 @@ impl Session {
         inner.speaker.stop();
         inner.engines.unload_model(id);
         inner.models.remove(id).map_err(|err| format!("{err:#}"))?;
+        if model.custom {
+            inner.catalog.remove_model(id)?;
+            let _ = std::fs::remove_dir_all(self.voices_dir_of(id));
+        }
+        self.forget_voices(|voice| voice.model_id == id)
+    }
+
+    /// Takes the voices that `gone` matches out of the settings: the
+    /// default voice falls to the first model that can speak, per-language
+    /// choices are dropped.
+    fn forget_voices(&self, gone: impl Fn(&VoiceRef) -> bool) -> Result<(), String> {
+        let inner = &self.inner;
+        let fallback = self.installed().first().map(|m| VoiceRef {
+            model_id: m.id.clone(),
+            voice_id: m.default_voice.clone(),
+        });
         let settings = {
             let mut settings = inner.settings.write().unwrap();
-            if settings
-                .default_voice
-                .as_ref()
-                .is_some_and(|v| v.model_id == id)
-            {
-                settings.default_voice = inner.models.installed().first().map(|m| VoiceRef {
-                    model_id: m.id.clone(),
-                    voice_id: m.default_voice.clone(),
-                });
+            if settings.default_voice.as_ref().is_some_and(&gone) {
+                settings.default_voice = fallback;
             }
-            settings.language_voices.retain(|_, v| v.model_id != id);
+            settings.language_voices.retain(|_, v| !gone(v));
             settings
                 .save(&inner.paths.settings_file)
                 .map_err(|err| format!("could not save settings: {err}"))?;
@@ -428,6 +543,134 @@ impl Session {
         };
         self.emit(Event::Settings(settings));
         Ok(())
+    }
+
+    /// Adds a model of the user's own, or replaces the one of the same id.
+    pub fn add_model(&self, model: Value) -> Result<ModelView, String> {
+        let model: ModelInfo = serde_json::from_value(model)
+            .map_err(|err| format!("this is not a model definition: {err}"))?;
+        let inner = &self.inner;
+        if inner.downloads.lock().unwrap().contains_key(&model.id) {
+            return Err("this model is being installed".into());
+        }
+        let replaced = inner.catalog.find(&model.id);
+        let model = inner.catalog.add_model(model)?;
+        // A definition that changed must not keep speaking the old way.
+        inner.engines.unload_model(&model.id);
+        if let Some(old) = replaced {
+            // Voices the new definition no longer has.
+            self.forget_voices(|voice| {
+                voice.model_id == old.id && model.voice(&voice.voice_id).is_none()
+            })?;
+        }
+        if self.is_ready(&model) {
+            self.adopt_as_default(&model);
+        }
+        Ok(ModelView {
+            installed: self.is_ready(&model),
+            partial_bytes: 0,
+            installing: false,
+            progress: None,
+            info: ModelInfo::clone(&model),
+        })
+    }
+
+    fn voices_dir_of(&self, model_id: &str) -> PathBuf {
+        self.inner.paths.voices_dir.join(model_id)
+    }
+
+    /// Adds a voice to a model that imitates recordings, from a WAV file
+    /// of someone speaking. Returns the new voice.
+    pub fn add_voice(
+        &self,
+        model_id: &str,
+        name: &str,
+        recording: &Path,
+        text: Option<String>,
+    ) -> Result<VoiceInfo, String> {
+        let inner = &self.inner;
+        let model = inner
+            .catalog
+            .find(model_id)
+            .ok_or_else(|| format!("unknown model {model_id}"))?;
+        if !model.imitates_recordings {
+            return Err(format!(
+                "{} has a fixed set of voices; it cannot imitate a recording",
+                model.name
+            ));
+        }
+        let name = name.trim();
+        // The id names a file, so it keeps to letters, digits and dashes.
+        let mut id: String = name
+            .to_lowercase()
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { '-' })
+            .collect();
+        while id.contains("--") {
+            id = id.replace("--", "-");
+        }
+        let id = id.trim_matches('-').to_string();
+        if id.is_empty() {
+            return Err("give the voice a name".into());
+        }
+        let bytes = std::fs::read(recording)
+            .map_err(|err| format!("could not read {}: {err}", recording.display()))?;
+        let audio = crate::wav::decode(&bytes).map_err(|err| {
+            format!(
+                "{} is not a WAV recording Speachy can read ({err:#})",
+                recording.display()
+            )
+        })?;
+        let seconds = audio.seconds();
+        if !(1.0..=120.0).contains(&seconds) {
+            return Err(format!(
+                "the recording is {seconds:.1} s long; it should be between 1 s and 2 minutes"
+            ));
+        }
+        // Kept in a form every runtime reads: 16-bit, one channel.
+        let dir = self.voices_dir_of(model_id);
+        let file = dir.join(format!("{id}.wav"));
+        std::fs::create_dir_all(&dir)
+            .and_then(|()| crate::wav::write(&file, &audio))
+            .map_err(|err| format!("could not save the recording: {err}"))?;
+        let voice = VoiceInfo {
+            id: id.clone(),
+            name: name.to_string(),
+            sid: 0,
+            gender: None,
+            languages: Vec::new(),
+            accent: None,
+            variant: None,
+            reference: Some(file.to_string_lossy().into_owned()),
+            reference_text: text.filter(|t| !t.trim().is_empty()),
+            custom: true,
+        };
+        inner.catalog.add_voice(model_id, voice)?;
+        // The model may hold the previous recording of this voice.
+        inner.engines.unload_model(model_id);
+        inner
+            .catalog
+            .find(model_id)
+            .and_then(|m| m.voice(&id).cloned())
+            .ok_or_else(|| format!("the voice {id} was not added"))
+    }
+
+    /// Removes a voice the user added.
+    pub fn remove_voice(&self, model_id: &str, voice_id: &str) -> Result<(), String> {
+        let inner = &self.inner;
+        let removed = inner
+            .catalog
+            .remove_voice(model_id, voice_id)?
+            .ok_or_else(|| format!("{voice_id} is not a voice you added to {model_id}"))?;
+        inner.speaker.stop();
+        inner.engines.unload_model(model_id);
+        // Only a recording Speachy made a copy of.
+        if let Some(file) = removed.reference.map(PathBuf::from) {
+            if file.starts_with(&inner.paths.voices_dir) {
+                let _ = std::fs::remove_file(file);
+            }
+        }
+        self.forget_voices(|voice| voice.model_id == model_id && voice.voice_id == voice_id)
     }
 
     /// Applies a partial settings update (see [`Settings::merged`]), saves
@@ -475,7 +718,8 @@ impl Session {
         lang: Option<String>,
     ) -> Result<Vec<PlannedChunk>, String> {
         let settings = self.settings_for(voice, lang);
-        plan::plan(text, &settings, &self.installed()).map_err(|err| err.to_string())
+        let installed = self.installed();
+        plan::plan(text, &settings, &refs(&installed)).map_err(|err| err.to_string())
     }
 
     /// Starts speaking `text`, replacing whatever is being spoken. Returns
@@ -487,8 +731,9 @@ impl Session {
         lang: Option<String>,
     ) -> Result<u64, String> {
         let settings = self.settings_for(voice, lang);
+        let installed = self.installed();
         let chunks =
-            plan::plan(text, &settings, &self.installed()).map_err(|err| err.to_string())?;
+            plan::plan(text, &settings, &refs(&installed)).map_err(|err| err.to_string())?;
         Ok(self.inner.speaker.speak(
             chunks,
             SpeakOptions {
@@ -503,8 +748,8 @@ impl Session {
     /// speak (all supported languages if nothing is installed).
     pub fn detect_language(&self, text: &str) -> Option<Detected> {
         let installed = self.installed();
-        let models: Vec<&ModelInfo> = if installed.is_empty() {
-            catalog::catalog().iter().collect()
+        let models = if installed.is_empty() {
+            self.inner.catalog.models()
         } else {
             installed
         };
@@ -592,7 +837,8 @@ impl Session {
     /// `None` if no model is installed.
     pub fn load_default_voice(&self) -> Result<Option<String>, String> {
         // Plan a token text to find out which engine the default voice uses.
-        let Ok(chunks) = plan::plan("preload", &self.settings(), &self.installed()) else {
+        let installed = self.installed();
+        let Ok(chunks) = plan::plan("preload", &self.settings(), &refs(&installed)) else {
             return Ok(None);
         };
         let Some(first) = chunks.first() else {
@@ -616,6 +862,27 @@ impl Session {
             }
             Command::CancelInstall { id } => Ok(json!({ "cancelled": self.cancel_install(&id) })),
             Command::RemoveModel { id } => self.remove_model(&id).and_then(|()| done()),
+            Command::AddModel { model } => {
+                let model = self.add_model(model)?;
+                Ok(json!({ "model": to_json(&model)? }))
+            }
+            Command::ServerOffer { endpoint, model } => {
+                let offer = crate::server::offer(&endpoint, model.as_deref())
+                    .map_err(|err| format!("{err:#}"))?;
+                to_json(&offer)
+            }
+            Command::AddVoice {
+                model,
+                name,
+                recording,
+                text,
+            } => {
+                let voice = self.add_voice(&model, &name, &recording, text)?;
+                Ok(json!({ "voice": to_json(&voice)? }))
+            }
+            Command::RemoveVoice { model, voice } => {
+                self.remove_voice(&model, &voice).and_then(|()| done())
+            }
             Command::UpdateSettings { patch } => {
                 let settings = self.update_settings(patch)?;
                 Ok(json!({ "settings": to_json(&settings)? }))
@@ -632,7 +899,7 @@ impl Session {
                 let detected = self.detect_language(&text);
                 Ok(json!({
                     "language": detected.as_ref().map(|d| d.code),
-                    "name": detected.as_ref().map(|d| catalog::language_name(d.code)),
+                    "name": detected.as_ref().map(|d| language_label(d.code)),
                     "reliable": detected.as_ref().map(|d| d.reliable),
                 }))
             }
@@ -663,6 +930,20 @@ impl Session {
         let command: Command =
             serde_json::from_value(command).map_err(|err| format!("invalid command: {err}"))?;
         self.dispatch(command)
+    }
+}
+
+/// The models as the planner takes them.
+fn refs(models: &[Arc<ModelInfo>]) -> Vec<&ModelInfo> {
+    models.iter().map(Arc::as_ref).collect()
+}
+
+/// The English name of a language, or its code where a model of the user's
+/// lists one Speachy has no name for.
+fn language_label(code: &str) -> String {
+    match catalog::language_name(code) {
+        "Unknown" => code.to_string(),
+        name => name.to_string(),
     }
 }
 

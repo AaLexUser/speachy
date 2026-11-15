@@ -51,7 +51,17 @@ function keycaps(shortcut) {
     .join("");
 }
 
+const newServerForm = () => ({ url: "http://127.0.0.1:8000", offer: null, model: "", voices: "", langs: "en", langParam: "", busy: false });
 const models = () => S.snap.models;
+
+S.server = newServerForm();
+
+/** Fills the server form's voices with what the server lists for its model. */
+async function offerVoices() {
+  const f = S.server;
+  const offer = await invoke("engine", { command: { cmd: "server_offer", endpoint: f.url, model: f.model } }).catch(() => null);
+  f.voices = offer ? offer.voices.join(", ") : "";
+}
 const installed = () => models().filter((m) => m.installed);
 const modelById = (id) => models().find((m) => m.id === id);
 const langName = (code) => S.snap.languages[code] || code;
@@ -172,8 +182,15 @@ function pageHome() {
 function modelCard(m) {
   const langs = m.languages.length > 4 ? `${m.languages.length} languages` : m.languages.map(langName).join(", ");
   const speed = ["", "Slower", "Fast", "Very fast"][m.speed_tier] || "";
+  // A model that runs in a speech server has nothing to download.
+  const server = m.runtime.kind === "server" ? m.runtime : null;
+  const description = m.description || (server ? `Runs in the speech server at ${server.endpoint}, as ${server.model}.` : "");
+  const tag = m.recommended ? '<span class="tag accent">Recommended</span>' : server ? '<span class="tag">Server</span>' : "";
+  const facts = [langs, `${m.voices.length} ${m.voices.length === 1 ? "voice" : "voices"}`, speed, m.license].filter(Boolean);
   let action;
-  if (m.installing) {
+  if (server) {
+    action = `<button class="quiet danger" data-action="remove" data-id="${esc(m.id)}">Remove</button>`;
+  } else if (m.installing) {
     action = `<div class="progress" data-model="${esc(m.id)}">${progressHtml(m.progress)}</div>
       <button data-action="cancel-install" data-id="${esc(m.id)}">Cancel</button>`;
   } else if (m.installed) {
@@ -186,11 +203,9 @@ function modelCard(m) {
   return `
     <article class="card model" data-installed="${m.installed}">
       <div class="model-info">
-        <h2>${esc(m.name)} ${m.recommended ? '<span class="tag accent">Recommended</span>' : ""}</h2>
-        <p>${esc(m.description)}</p>
-        <div class="facts">
-          <span>${esc(langs)}</span><span>${m.voices.length} voices</span><span>${esc(speed)}</span><span>${esc(m.license)}</span>
-        </div>
+        <h2>${esc(m.name)} ${tag}</h2>
+        <p>${esc(description)}</p>
+        <div class="facts">${facts.map((f) => `<span>${esc(f)}</span>`).join("")}</div>
       </div>
       <div class="model-action">${action}</div>
     </article>`;
@@ -209,7 +224,38 @@ function pageModels() {
       <h1>Models</h1>
       <p class="lede">Voices run on this computer; nothing you read leaves it. Download one or more models, then pick voices.</p>
     </header>
-    ${models().map(modelCard).join("")}`;
+    ${models().map(modelCard).join("")}
+    ${serverCard()}`;
+}
+
+/** The form that adds a model from a speech server. */
+function serverCard() {
+  const f = S.server;
+  let rest = "";
+  if (f.offer) {
+    const offered = f.offer.models;
+    const model = offered.length
+      ? `<select id="server-model" data-change="server-model">${offered.map((m) => `<option ${m === f.model ? "selected" : ""}>${esc(m)}</option>`).join("")}</select>`
+      : `<input type="text" id="server-model" value="${esc(f.model)}" placeholder="The model, as the server names it" />`;
+    rest = `
+      <label class="field"><span>Model</span>${model}</label>
+      <label class="field"><span>Voices</span><input type="text" id="server-voices" value="${esc(f.voices)}" placeholder="Names the server knows, separated by commas" /></label>
+      <label class="field"><span>Languages</span><input type="text" id="server-langs" value="${esc(f.langs)}" placeholder="en, ru, de" /></label>
+      <label class="field"><span>Language field</span><input type="text" id="server-lang-param" value="${esc(f.langParam)}" placeholder="Optional. lang_code for mlx-audio" /></label>
+      <div class="row"><span class="spacer"></span><button class="primary" data-action="server-add">Add model</button></div>`;
+  }
+  return `
+    <article class="card server">
+      <div class="card-head">
+        <h2>Speech server</h2>
+        <p>Speak with a model that runs in a speech server on this computer, such as mlx-audio. Speachy sends it the text a piece at a time and plays what comes back.</p>
+      </div>
+      <label class="field"><span>Address</span>
+        <input type="text" id="server-url" value="${esc(f.url)}" spellcheck="false" />
+        <button data-action="server-find" ${f.busy ? "disabled" : ""}>${f.busy ? "Asking…" : "Find models"}</button>
+      </label>
+      ${rest}
+    </article>`;
 }
 
 function voiceOptions(lang, selected) {
@@ -222,7 +268,8 @@ function voiceOptions(lang, selected) {
           const value = `${m.id}|${v.id}`;
           const on = selected && selected.model_id === m.id && selected.voice_id === v.id;
           const accent = v.accent ? `, ${v.accent}` : "";
-          return `<option value="${esc(value)}" ${on ? "selected" : ""}>${esc(v.name)} (${v.gender}${esc(accent)})</option>`;
+          const about = [v.gender, v.accent].filter(Boolean).join(", ");
+          return `<option value="${esc(value)}" ${on ? "selected" : ""}>${esc(v.name)}${about ? ` (${esc(about)})` : ""}</option>`;
         })
         .join("");
       return options ? `<optgroup label="${esc(m.name)}">${options}</optgroup>` : "";
@@ -246,7 +293,7 @@ function pageVoices() {
   const cards = shown.voices
     .map((v) => {
       const on = current.model.id === shown.id && current.voice.id === v.id;
-      const sub = [v.gender === "female" ? "Female" : "Male", v.accent].filter(Boolean).join(" · ");
+      const sub = [{ female: "Female", male: "Male" }[v.gender], v.accent, v.custom && "Yours"].filter(Boolean).join(" · ");
       return `
         <div class="voice ${on ? "selected" : ""}" role="button" tabindex="0" data-action="pick-voice" data-model="${esc(shown.id)}" data-voice="${esc(v.id)}">
           <span class="voice-name">${esc(v.name)}</span><span class="voice-sub">${esc(sub)}</span>
@@ -533,8 +580,64 @@ const ACTIONS = {
   "cancel-install": (el) => engine("cancel_install", { id: el.dataset.id }),
   remove: async (el) => {
     const model = modelById(el.dataset.id);
-    if (!window.confirm(`Remove ${model.name} and its voices from this computer?`)) return;
+    const question =
+      model.runtime.kind === "server"
+        ? `Remove ${model.name} from Speachy? The speech server keeps the model.`
+        : `Remove ${model.name} and its voices from this computer?`;
+    if (!window.confirm(question)) return;
     await engine("remove_model", { id: el.dataset.id });
+    await refresh();
+  },
+  "server-find": async () => {
+    const f = S.server;
+    f.url = document.getElementById("server-url").value.trim();
+    f.busy = true;
+    render();
+    // A server that does not answer has been reported; the form stays.
+    const offer = await engine("server_offer", { endpoint: f.url }).catch(() => null);
+    f.busy = false;
+    if (offer) {
+      f.offer = offer;
+      f.model = offer.models[0] || "";
+      f.voices = "";
+      if (f.model) await offerVoices();
+    }
+    render();
+  },
+  "server-add": async () => {
+    const f = S.server;
+    const list = (id) =>
+      document
+        .getElementById(id)
+        .value.split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+    const model = document.getElementById("server-model").value.trim();
+    if (!model) return toast("Say which model of the server to use.");
+    const voices = list("server-voices");
+    const languages = list("server-langs");
+    if (!languages.length) return toast("Say which languages the model speaks, such as en.");
+    const langParam = document.getElementById("server-lang-param").value.trim();
+    // "org/Some-Model_v2" is known here as "some-model-v2".
+    const id = model
+      .split("/")
+      .pop()
+      .toLowerCase()
+      .replace(/[^a-z0-9.]+/g, "-")
+      .replace(/^[-.]+|[-.]+$/g, "");
+    const added = await engine("add_model", {
+      model: {
+        id,
+        name: model.split("/").pop(),
+        runtime: { kind: "server", endpoint: f.url, model, language_param: langParam || null },
+        languages,
+        // A model with a single voice does not name it.
+        voices: (voices.length ? voices : ["default"]).map((voice) => ({ id: voice })),
+      },
+    }).catch(() => null);
+    if (!added) return;
+    S.server = newServerForm();
+    toast(`${added.model.name} was added.`);
     await refresh();
   },
   "voice-model": (el) => {
@@ -565,6 +668,11 @@ const ACTIONS = {
 };
 
 const CHANGES = {
+  "server-model": async (el) => {
+    S.server.model = el.value;
+    await offerVoices();
+    render();
+  },
   "auto-detect": (el) => saveSettings({ auto_detect_language: el.checked }),
   language: (el) => saveSettings({ language: el.value }),
   toggle: (el) => saveSettings({ [el.dataset.field]: el.checked }, { rerender: false }),
@@ -640,6 +748,9 @@ main.addEventListener("change", (e) => {
 main.addEventListener("input", (e) => {
   const el = e.target;
   if (el.id === "try-text") S.draft = el.value;
+  // What is typed into the server form survives the page being redrawn.
+  const serverField = { "server-url": "url", "server-model": "model", "server-voices": "voices", "server-langs": "langs", "server-lang-param": "langParam" }[el.id];
+  if (serverField) S.server[serverField] = el.value;
   const input = INPUTS[el.dataset.input];
   if (input) document.getElementById(input.label).textContent = input.text(Number(el.value));
 });

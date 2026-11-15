@@ -199,3 +199,149 @@ fn serve_answers_each_line_and_echoes_ids() {
         .iter()
         .any(|l| l["event"] == "settings" && l["data"]["speed"] == 2.0));
 }
+
+/// A speech server that lists one model with two voices and answers every
+/// speech request with a second of sound. Returns its address.
+fn speech_server() -> String {
+    use std::io::Read;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = format!("http://{}", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            let mut data = Vec::new();
+            let mut buf = [0u8; 4096];
+            // Headers, then as much body as they announce.
+            let wanted = loop {
+                let n = stream.read(&mut buf).unwrap_or(0);
+                if n == 0 {
+                    break 0;
+                }
+                data.extend_from_slice(&buf[..n]);
+                if let Some(at) = data.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let head = String::from_utf8_lossy(&data[..at]).to_lowercase();
+                    let length = head
+                        .lines()
+                        .find_map(|l| l.strip_prefix("content-length:"))
+                        .map_or(0, |v| v.trim().parse::<usize>().unwrap());
+                    break at + 4 + length;
+                }
+            };
+            while data.len() < wanted {
+                let n = stream.read(&mut buf).unwrap_or(0);
+                if n == 0 {
+                    break;
+                }
+                data.extend_from_slice(&buf[..n]);
+            }
+            let request = String::from_utf8_lossy(&data).into_owned();
+            let (kind, body) = if request.starts_with("GET /v1/models") {
+                (
+                    "application/json",
+                    br#"{"data":[{"id":"org/Big-Voice_v2"}]}"#.to_vec(),
+                )
+            } else if request.starts_with("GET /v1/audio/voices") {
+                (
+                    "application/json",
+                    br#"{"data":[{"id":"anna"},{"id":"ivan"}]}"#.to_vec(),
+                )
+            } else {
+                let audio = speachy_core::engine::Audio {
+                    samples: vec![0.25; 8000],
+                    sample_rate: 8000,
+                };
+                ("audio/wav", speachy_core::wav::encode(&audio))
+            };
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(&body);
+        }
+    });
+    address
+}
+
+#[test]
+fn a_model_in_a_speech_server_is_added_spoken_with_and_removed() {
+    let home = tempfile::tempdir().unwrap();
+    let server = speech_server();
+
+    let offer = stdout(&cli(
+        home.path(),
+        &["server", &server, "org/Big-Voice_v2"],
+        None,
+    ));
+    assert!(
+        offer.contains("org/Big-Voice_v2") && offer.contains("anna, ivan"),
+        "{offer}"
+    );
+
+    // The voices come from the server, the id from the model's name.
+    let added = cli(
+        home.path(),
+        &[
+            "add-model",
+            "--server",
+            &server,
+            "--model",
+            "org/Big-Voice_v2",
+            "--languages",
+            "en,ru",
+        ],
+        None,
+    );
+    assert!(
+        added.status.success(),
+        "{}",
+        String::from_utf8_lossy(&added.stderr)
+    );
+    assert!(
+        stdout(&added).contains("added big-voice-v2 (2 voice(s))"),
+        "{}",
+        stdout(&added)
+    );
+    let table = stdout(&cli(home.path(), &["models"], None));
+    assert!(
+        table
+            .lines()
+            .any(|l| l.starts_with("big-voice-v2") && l.contains("server")),
+        "{table}"
+    );
+    let voices = stdout(&cli(home.path(), &["voices"], None));
+    assert!(
+        voices.contains("big-voice-v2/anna") && voices.contains("big-voice-v2/ivan"),
+        "{voices}"
+    );
+
+    // It is the only model that can speak, so it is the one that does.
+    let wav = home.path().join("out.wav");
+    let spoken = cli(
+        home.path(),
+        &[
+            "speak",
+            "--out",
+            wav.to_str().unwrap(),
+            "Hello from the server.",
+        ],
+        None,
+    );
+    assert!(
+        spoken.status.success(),
+        "{}",
+        String::from_utf8_lossy(&spoken.stderr)
+    );
+    let audio = speachy_core::wav::decode(&std::fs::read(&wav).unwrap()).unwrap();
+    assert!(audio.seconds() > 0.9, "{} s", audio.seconds());
+
+    assert!(cli(home.path(), &["remove", "big-voice-v2"], None)
+        .status
+        .success());
+    let table = stdout(&cli(home.path(), &["models"], None));
+    assert!(!table.contains("big-voice-v2"), "{table}");
+
+    // Without a server at the address, the reason is given.
+    let nobody = cli(home.path(), &["server", "http://127.0.0.1:9"], None);
+    assert!(!nobody.status.success());
+    assert!(String::from_utf8_lossy(&nobody.stderr).contains("is not answering"));
+}

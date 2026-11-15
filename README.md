@@ -52,6 +52,44 @@ CC BY 4.0, with voice recordings from Kyutai's
 [tts-voices](https://huggingface.co/kyutai/tts-voices) under CC BY 4.0 and
 CC0).
 
+### Other models: speech servers
+
+The models above run inside Speachy. Larger ones — Qwen3-TTS, Chatterbox,
+Dia and whatever comes next — run in a speech server on your computer, and
+Speachy can speak with any server that answers OpenAI's speech request.
+[mlx-audio](https://github.com/Blaizzy/mlx-audio) is the one for Apple
+Silicon:
+
+```sh
+pip install "mlx-audio[server,tts]"
+python -m mlx_audio.server            # http://127.0.0.1:8000
+```
+
+Then, in Speachy, open **Models → Speech server**, press *Find models* and
+add one — or from a terminal:
+
+```sh
+speachy-cli add-model --server http://127.0.0.1:8000 \
+    --model mlx-community/Kokoro-82M-bf16 --language-param lang_code --language-value en=a
+```
+
+Speachy still does its part: it cuts the text into chunks, asks the server
+for one chunk at a time, prepares the next ones while you listen and plays
+them without gaps. The server has to be running when you press the
+shortcut; if it is not, the pill says so.
+
+### Voices of your own
+
+Models that imitate a recording (Pocket TTS, and server models added with
+`--imitates-recordings`) take voices from you: 5 to 30 seconds of someone
+speaking, as a WAV file.
+
+```sh
+speachy-cli add-voice pocket-tts "My voice" recording.wav
+```
+
+Only use recordings of people who agreed to it.
+
 ## Install
 
 Download the disk image for your Mac from the
@@ -147,12 +185,13 @@ to script, debug and test without a window, a screen or a sound card.
 ```
 crates/speachy-core/   The engine
   src/session.rs         the front door: commands in, events out
-  src/catalog.rs         downloadable models and their voices
+  src/catalog.rs         the models and voices: built in, and your own
   src/models.rs          download (resumable), unpack, remove
   src/text.rs            cleaning and chunking
   src/lang.rs            language detection
   src/plan.rs            language and voice for each chunk
   src/engine.rs          sherpa-onnx synthesis, loaded-model cache
+  src/server.rs          synthesis by a speech server
   src/english.rs         English phonemes for Kokoro
   src/pipeline.rs        synthesize-ahead pipeline, pause / stop
   src/audio.rs           gapless output queue

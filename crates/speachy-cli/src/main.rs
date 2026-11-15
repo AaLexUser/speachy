@@ -45,8 +45,71 @@ enum Cmd {
     },
     /// Download and install a model.
     Install { model: String },
-    /// Remove an installed model.
+    /// Remove an installed model, or a model you added.
     Remove { model: String },
+    /// Add a model that runs in a speech server on this computer (mlx-audio
+    /// and other servers that answer OpenAI's speech request), or one
+    /// defined in a JSON file.
+    ///
+    /// `add-model --server http://127.0.0.1:8000 --model mlx-community/Kokoro-82M-bf16`
+    AddModel {
+        /// Address of the speech server.
+        #[arg(long, value_name = "URL", required_unless_present = "file")]
+        server: Option<String>,
+        /// The model, as the server names it.
+        #[arg(long, value_name = "NAME", required_unless_present = "file")]
+        model: Option<String>,
+        /// Id to know the model by here (default: made from its name).
+        #[arg(long)]
+        id: Option<String>,
+        /// Name to show (default: the id).
+        #[arg(long)]
+        name: Option<String>,
+        /// Languages the model speaks, as ISO 639-1 codes: `en,ru,de`.
+        #[arg(long, value_delimiter = ',', default_value = "en")]
+        languages: Vec<String>,
+        /// A voice of the model; repeat for more (default: the voices the
+        /// server lists).
+        #[arg(long = "voice", value_name = "VOICE")]
+        voices: Vec<String>,
+        /// Name of the request field that carries the language, if the
+        /// server takes one (`lang_code` for mlx-audio).
+        #[arg(long, value_name = "FIELD")]
+        language_param: Option<String>,
+        /// What to send for a language instead of its code: `en=a`.
+        #[arg(long = "language-value", value_name = "CODE=VALUE")]
+        language_values: Vec<String>,
+        /// A further field to send with every request: `temperature=0.7`.
+        #[arg(long = "option", value_name = "KEY=VALUE")]
+        options: Vec<String>,
+        /// The model can speak in the voice of a recording (see `add-voice`).
+        #[arg(long)]
+        imitates_recordings: bool,
+        /// A whole model definition, as JSON.
+        #[arg(long, value_name = "FILE.json", conflicts_with_all = ["server", "model"])]
+        file: Option<PathBuf>,
+    },
+    /// Ask a speech server which models it has and, for one model, which
+    /// voices.
+    Server {
+        /// Address of the server, such as http://127.0.0.1:8000.
+        url: String,
+        model: Option<String>,
+    },
+    /// Add a voice of your own to a model that imitates recordings, from a
+    /// WAV file of someone speaking for 5 to 30 seconds.
+    AddVoice {
+        model: String,
+        /// What to call the voice.
+        name: String,
+        #[arg(value_name = "RECORDING.wav")]
+        recording: PathBuf,
+        /// What is said in the recording, for the models that need it.
+        #[arg(long)]
+        text: Option<String>,
+    },
+    /// Remove a voice you added.
+    RemoveVoice { model: String, voice: String },
     /// Show the settings, or change some: `settings speed=1.2 language=de`.
     ///
     /// Values are JSON; anything that does not parse as JSON is taken as a
@@ -313,7 +376,9 @@ fn run_command(
                 print_json(&snapshot["models"]);
             } else {
                 for m in snapshot["models"].as_array().into_iter().flatten() {
-                    let state = if m["installed"] == true {
+                    let state = if m["runtime"]["kind"] == "server" {
+                        "server"
+                    } else if m["installed"] == true {
                         "installed"
                     } else {
                         "-"
@@ -360,7 +425,7 @@ fn run_command(
                             m["id"].as_str().unwrap_or_default(),
                             v["id"].as_str().unwrap_or_default(),
                             v["name"].as_str().unwrap_or_default(),
-                            v["gender"].as_str().unwrap_or_default(),
+                            v["gender"].as_str().unwrap_or("-"),
                             v["accent"].as_str().unwrap_or("-"),
                             v["languages"]
                                 .as_array()
@@ -388,6 +453,165 @@ fn run_command(
                 print_json(&json!({ "removed": model }));
             } else {
                 println!("removed {model}");
+            }
+        }
+        Cmd::AddModel {
+            server,
+            model,
+            id,
+            name,
+            languages,
+            voices,
+            language_param,
+            language_values,
+            options,
+            imitates_recordings,
+            file,
+        } => {
+            let definition = match (file, server, model) {
+                (Some(file), _, _) => {
+                    let text = std::fs::read_to_string(&file)
+                        .map_err(|err| format!("could not read {}: {err}", file.display()))?;
+                    serde_json::from_str::<Value>(&text)
+                        .map_err(|err| format!("{} is not JSON: {err}", file.display()))?
+                }
+                (None, Some(server), Some(model)) => {
+                    let voices = if voices.is_empty() {
+                        let offer = dispatch(
+                            json!({ "cmd": "server_offer", "endpoint": server, "model": model }),
+                        )?;
+                        let offered: Vec<String> = offer["voices"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|v| v.as_str().map(str::to_string))
+                            .collect();
+                        if offered.is_empty() {
+                            eprintln!(
+                                "note: the server lists no voices for {model}; adding one \
+                                 called \"default\". Name the voices with --voice if it has more."
+                            );
+                            vec!["default".to_string()]
+                        } else {
+                            offered
+                        }
+                    } else {
+                        voices
+                    };
+                    let pairs = |items: &[String], parse: bool| -> Result<Value, String> {
+                        let mut map = serde_json::Map::new();
+                        for item in items {
+                            let (key, raw) = item
+                                .split_once('=')
+                                .ok_or_else(|| format!("expected KEY=VALUE, got {item}"))?;
+                            let value = match serde_json::from_str(raw) {
+                                Ok(value) if parse => value,
+                                _ => Value::String(raw.to_string()),
+                            };
+                            map.insert(key.to_string(), value);
+                        }
+                        Ok(Value::Object(map))
+                    };
+                    // "org/Some-Model_v2" becomes "some-model-v2".
+                    let id = id.unwrap_or_else(|| {
+                        let last = model.rsplit('/').next().unwrap_or(&model).to_lowercase();
+                        let plain: String = last
+                            .chars()
+                            .map(|c| {
+                                if c.is_ascii_alphanumeric() || c == '.' {
+                                    c
+                                } else {
+                                    '-'
+                                }
+                            })
+                            .collect();
+                        plain.trim_matches(['-', '.']).to_string()
+                    });
+                    json!({
+                        "id": id,
+                        "name": name.unwrap_or_default(),
+                        "runtime": {
+                            "kind": "server",
+                            "endpoint": server,
+                            "model": model,
+                            "language_param": language_param,
+                            "language_values": pairs(&language_values, false)?,
+                            "options": pairs(&options, true)?,
+                        },
+                        "languages": languages,
+                        "voices": voices.iter().map(|v| json!({ "id": v })).collect::<Vec<_>>(),
+                        "imitates_recordings": imitates_recordings,
+                    })
+                }
+                _ => return Err("give --server and --model, or --file".into()),
+            };
+            let added = dispatch(json!({ "cmd": "add_model", "model": definition }))?;
+            if json_output {
+                print_json(&added["model"]);
+            } else {
+                println!(
+                    "added {} ({} voice(s)); speak with it: speak --voice {}/{} \"Hello.\"",
+                    added["model"]["id"].as_str().unwrap_or_default(),
+                    added["model"]["voices"].as_array().map_or(0, Vec::len),
+                    added["model"]["id"].as_str().unwrap_or_default(),
+                    added["model"]["default_voice"].as_str().unwrap_or_default(),
+                );
+            }
+        }
+        Cmd::Server { url, model } => {
+            let offer =
+                dispatch(json!({ "cmd": "server_offer", "endpoint": url, "model": model }))?;
+            if json_output {
+                print_json(&offer);
+            } else {
+                let list = |key: &str| -> Vec<String> {
+                    offer[key]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                };
+                let (models, voices) = (list("models"), list("voices"));
+                if models.is_empty() {
+                    println!("The server answers, and lists no models.");
+                } else {
+                    println!("models:");
+                    models.iter().for_each(|m| println!("  {m}"));
+                }
+                match (&model, voices.is_empty()) {
+                    (Some(model), true) => println!("It lists no voices for {model}."),
+                    (_, false) => println!("voices: {}", voices.join(", ")),
+                    (None, true) => {}
+                }
+            }
+        }
+        Cmd::AddVoice {
+            model,
+            name,
+            recording,
+            text,
+        } => {
+            // The engine may run with another working directory in mind.
+            let recording = std::path::absolute(&recording).unwrap_or(recording);
+            let added = dispatch(json!({
+                "cmd": "add_voice", "model": model, "name": name, "recording": recording, "text": text,
+            }))?;
+            if json_output {
+                print_json(&added["voice"]);
+            } else {
+                println!(
+                    "added the voice {model}/{}",
+                    added["voice"]["id"].as_str().unwrap_or_default()
+                );
+            }
+        }
+        Cmd::RemoveVoice { model, voice } => {
+            dispatch(json!({ "cmd": "remove_voice", "model": model, "voice": voice }))?;
+            if json_output {
+                print_json(&json!({ "removed": format!("{model}/{voice}") }));
+            } else {
+                println!("removed the voice {model}/{voice}");
             }
         }
         Cmd::Settings { changes } => {
@@ -516,6 +740,8 @@ fn run_command(
             } else {
                 println!("models    {}", paths.models_dir.display());
                 println!("settings  {}", paths.settings_file.display());
+                println!("added     {}", paths.catalog_file.display());
+                println!("voices    {}", paths.voices_dir.display());
             }
         }
     }

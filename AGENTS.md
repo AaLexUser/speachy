@@ -22,7 +22,7 @@ screen or a sound card to build, debug or verify engine work.
 
 | Crate | What it is | May depend on |
 | --- | --- | --- |
-| `crates/speachy-core` | The engine: models, text, language, planning, synthesis, the speech pipeline, settings. Front door: `session::Session`. | no UI toolkit, no front end |
+| `crates/speachy-core` | The engine: the catalog of models, text, language, planning, synthesis (inside Speachy or by a speech server), the speech pipeline, settings. Front door: `session::Session`. | no UI toolkit, no front end |
 | `crates/speachy-cli` | Headless front end: subcommands, raw JSON commands, the `serve` channel. | `speachy-core` |
 | `src-tauri` + `ui/` | The desktop shell: windows, menu-bar icon, global shortcuts, reading the selection. | `speachy-core`, Tauri |
 
@@ -51,7 +51,11 @@ commands, as `{"cmd": "<name>", …}`:
 | `snapshot` | | models with install state, settings, speech state, paths |
 | `install_model` | `id`, `wait` (default false) | `{}`; progress as `download` events |
 | `cancel_install` | `id` | `{"cancelled": bool}` |
-| `remove_model` | `id` | `{}` |
+| `remove_model` | `id` | `{}`; a model the user added is forgotten too |
+| `add_model` | `model` (a model definition, see below) | `{"model": …}` |
+| `server_offer` | `endpoint`, `model` (optional) | `{"models": […], "voices": […]}` as the speech server lists them |
+| `add_voice` | `model`, `name`, `recording` (path of a WAV file), `text` (optional) | `{"voice": …}` |
+| `remove_voice` | `model`, `voice` | `{}` |
 | `update_settings` | `patch` (only the fields to change) | `{"settings": …}` |
 | `speak` | `text`, `voice` (`{model_id, voice_id}`), `lang` | `{"session": n}` |
 | `plan` | same as `speak` | `{"chunks": […]}`; nothing is synthesized |
@@ -64,6 +68,49 @@ commands, as `{"cmd": "<name>", …}`:
 Events (`session::Event`) are `{"event": "<kind>", "data": …}` with kinds
 `speech` (state changes, chunk ready / playing, finished), `download`,
 `settings` and `notice`.
+
+## Models, runtimes and voices
+
+A model is data (`catalog::ModelInfo`): its name, languages and voices, and
+its **runtime**, which says where it runs.
+
+| Runtime | What it is | Code |
+| --- | --- | --- |
+| `sherpa` | Inside Speachy, through sherpa-onnx, from files Speachy downloads. | `engine.rs` (`SherpaEngine`) |
+| `server` | In a speech server that answers OpenAI's speech request (`POST /v1/audio/speech`): mlx-audio and many others. Speachy sends one chunk of text per request. | `server.rs` (`ServerEngine`) |
+
+The models that come with Speachy are built in (`catalog::builtin`). The
+`Catalog` adds the user's own: models added with `add_model`, and voices
+added with `add_voice` to any model that imitates a recording
+(`imitates_recordings`). Both are kept in `models.json` next to the settings;
+recordings are copied to the `voices` directory (`speachy-cli paths`).
+
+A model definition, as `add_model` takes it (only `id`, `runtime`,
+`languages` and `voices` are required):
+
+```json
+{
+  "id": "mlx-kokoro",
+  "name": "Kokoro (mlx-audio)",
+  "runtime": {
+    "kind": "server",
+    "endpoint": "http://127.0.0.1:8000",
+    "model": "mlx-community/Kokoro-82M-bf16",
+    "language_param": "lang_code",
+    "language_values": { "en": "a" },
+    "options": { "temperature": 0.7 }
+  },
+  "languages": ["en"],
+  "voices": [{ "id": "af_heart" }, { "id": "am_adam" }],
+  "imitates_recordings": false
+}
+```
+
+To support another way of running models, implement `engine::Synthesizer`,
+add a variant to `catalog::Runtime` and build it in `EngineCache::engine`.
+The pipeline, the planner and the front ends do not change: they see
+models and synthesizers, not runtimes. `tests/server.rs` shows how to test
+a runtime end to end against a stand-in.
 
 **Adding behaviour:** add a method to `Session`, a `Command` variant that
 calls it, and a test in `crates/speachy-core/tests/session.rs`. Expose it in
@@ -86,6 +133,9 @@ speachy-cli speak --no-audio "Timing only."       # synthesize, discard the audi
 speachy-cli speak --out out.wav "Keep the audio." # write a WAV instead of playing
 speachy-cli settings speed=1.2 shortcuts.stop=F9
 speachy-cli audio                     # the sound output device and whether it can be used
+speachy-cli server http://127.0.0.1:8000          # what a speech server offers
+speachy-cli add-model --server http://127.0.0.1:8000 --model mlx-community/Kokoro-82M-bf16
+speachy-cli add-voice pocket-tts "My voice" me.wav   # a voice from a recording
 speachy-cli run '{"cmd":"snapshot"}'  # any engine command, as the app sends it
 ```
 
@@ -133,6 +183,8 @@ scripts/check-layers.sh
   synthesizer and a virtual sound card: ordering, gapless output, the
   look-ahead bound, pause, stop, replacement, shutdown.
 - `crates/speachy-core/tests/session.rs` tests the command surface.
+- `crates/speachy-core/tests/server.rs` tests models that run in a speech
+  server, against a small HTTP server in the test process.
 - `crates/speachy-cli/tests/cli.rs` runs the built binary.
 - None of these download models. To check real synthesis, install a model
   into a scratch `--home` and use `speak --no-audio` or `--out`.
