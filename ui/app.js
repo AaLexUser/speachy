@@ -376,6 +376,9 @@ function pageSettings() {
       ${shortcutRow("speak_selection", "Speak selection", "Reads the selected text. Pressed again, stops.")}
       ${shortcutRow("pause_resume", "Pause / resume", "Holds playback where it is.")}
       ${shortcutRow("stop", "Stop", "Stops speaking immediately.")}
+      ${shortcutRow("faster", "Faster", "Speeds up the voice, also while it speaks.")}
+      ${shortcutRow("slower", "Slower", "Slows down the voice, also while it speaks.")}
+      ${shortcutRow("reset_speed", "Reset speed", "Back to normal speed. Pressed again, back to your speed.")}
       ${errors}
     </section>
     <section class="card">
@@ -465,6 +468,20 @@ function onSpeechEvent(e) {
     if (e.outcome === "failed" && e.message) toast(e.message, "error");
   }
   updateSpeechUi();
+}
+
+// Settings can change from outside the window, as the speed does with its
+// shortcuts. Sliders are set in place, so one being dragged is not redrawn.
+function onSettingsEvent(settings) {
+  if (!S.snap) return;
+  S.snap.settings = settings;
+  const values = { speed: settings.speed, volume: settings.volume, lookahead: settings.lookahead_secs };
+  for (const [name, input] of Object.entries(INPUTS)) {
+    const slider = main.querySelector(`[data-input="${name}"]`);
+    if (!slider || Number(slider.value) === values[name]) continue;
+    slider.value = values[name];
+    document.getElementById(input.label).textContent = input.text(values[name]);
+  }
 }
 
 function onUpdateEvent(status) {
@@ -653,6 +670,7 @@ window.addEventListener("focus", () => S.snap && !S.recording && refresh());
 
 listen("speech", (e) => onSpeechEvent(e.payload));
 listen("download", (e) => onDownloadEvent(e.payload));
+listen("settings", (e) => onSettingsEvent(e.payload));
 listen("notice", (e) => toast(e.payload));
 listen("update", (e) => onUpdateEvent(e.payload));
 listen("show-page", (e) => {

@@ -49,8 +49,13 @@ sleep 0.6
 keys s "control down, option down"
 sleep 2.5
 shot 3-pill-speaking
+
+# Faster, while it speaks: the pill shows the new speed.
+keys = "control down, option down"
+sleep 0.8
+shot 4-pill-faster
 sleep 6
-shot 4-after
+shot 5-after
 
 kill "$pid" 2>/dev/null || true
 echo "--- app log ---"
@@ -68,4 +73,5 @@ check() {
 check "notice: No text is selected" "the shortcut fired with nothing selected"
 check "speaking the selection" "the selection was read from the other app"
 check "first audio ready" "speech was synthesized and queued for playback"
+check "notice: Speed 1.1×" "the faster shortcut changed the speed while speaking"
 exit "$status"

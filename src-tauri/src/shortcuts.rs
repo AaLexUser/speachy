@@ -13,6 +13,9 @@ pub enum Action {
     SpeakSelection,
     PauseResume,
     Stop,
+    Faster,
+    Slower,
+    ResetSpeed,
 }
 
 /// The shortcuts currently registered with the system.
@@ -38,6 +41,9 @@ pub fn register_all(app: &AppHandle, shortcuts: &Shortcuts) -> Vec<String> {
             "Pause / resume",
         ),
         (&shortcuts.stop, Action::Stop, "Stop"),
+        (&shortcuts.faster, Action::Faster, "Faster"),
+        (&shortcuts.slower, Action::Slower, "Slower"),
+        (&shortcuts.reset_speed, Action::ResetSpeed, "Reset speed"),
     ];
     for (keys, action, label) in wanted {
         if keys.trim().is_empty() {
@@ -105,5 +111,15 @@ pub fn run(app: &AppHandle, action: Action) {
         Action::Stop => {
             session.stop();
         }
+        // The engine announces the new speed itself.
+        Action::Faster => report(app, session.change_speed(0.1)),
+        Action::Slower => report(app, session.change_speed(-0.1)),
+        Action::ResetSpeed => report(app, session.reset_speed()),
+    }
+}
+
+fn report<T>(app: &AppHandle, result: Result<T, String>) {
+    if let Err(message) = result {
+        speech::notice(app, &message);
     }
 }
