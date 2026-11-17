@@ -144,6 +144,9 @@ For English with Kokoro, words are converted to phonemes by
 [misaki-rs](https://github.com/MicheleYin/misaki-rs), the Rust port of the
 phonemizer Kokoro was trained with (`english.rs`); words it does not know are
 sounded out by spelling rules rather than skipped.
+For Russian with Supertonic, numbers, units and abbreviations are first
+written out as words, in the case the surrounding words call for
+(`russian.rs`).
 
 ## Engine and interface
 

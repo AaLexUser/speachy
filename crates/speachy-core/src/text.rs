@@ -349,7 +349,8 @@ const ABBREVIATIONS: &[&str] = &[
     "fig", "inc", "ltd", "co", "corp", "approx", "dept", "est", "vol", "al", "cf", "ca", "resp",
     "gen", "col", "lt", "sgt", "capt", "rev", "hon", "mt", "ft", "jan", "feb", "mar", "apr", "jun",
     "jul", "aug", "sep", "sept", "oct", "nov", "dec", "т.е", "т.д", "т.п", "т.к", "др", "им", "ул",
-    "стр", "рис", "см", "напр", "bzw", "z.b", "ca", "nr", "sog", "usw",
+    "стр", "рис", "см", "напр", "тыс", "млн", "млрд", "трлн", "руб", "коп", "кв", "чел", "ок",
+    "мин", "сек", "т.ч", "bzw", "z.b", "ca", "nr", "sog", "usw",
 ];
 
 /// Splits a paragraph into sentences. Slices of `p`, trimmed.
@@ -519,6 +520,7 @@ mod tests {
             "J. K. Rowling wrote it.",
             "Version 2.0.1 is out now.",
             "Он работает в г. Москве и т.д. уже давно.",
+            "Собрали 90 тыс. ₽ и 2 млн. $ от ок. 300 чел. (в т.ч. 20 руб. 50 коп. — наличными) за 3 мин. 20 сек. в кв. 5 и ещё 1 трлн. € из 2 млрд. ₽.",
         ];
         for text in cases {
             assert_eq!(texts(&chunk(text, &opts(200, 200))), [text]);
