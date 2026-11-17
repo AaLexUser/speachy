@@ -288,9 +288,10 @@ impl Synthesizer for SherpaEngine {
                 normalized = crate::numbers::spell_out_english(req.text);
                 text = normalized.as_str();
             }
-            // Supertonic misreads Russian numbers, units and abbreviations.
+            // Supertonic misreads Russian numbers, units and abbreviations,
+            // and sometimes stresses the wrong vowel.
             (Family::Supertonic, _) if req.lang == "ru" => {
-                normalized = crate::russian::spell_out(req.text);
+                normalized = crate::stress::mark(&crate::russian::spell_out(req.text));
                 text = normalized.as_str();
             }
             _ => {}
