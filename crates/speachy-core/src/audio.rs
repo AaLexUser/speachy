@@ -32,8 +32,54 @@ pub trait AudioStream {
     /// Queues `audio` followed by `pause_after` of silence. Chunks play in
     /// the order pushed, back to back.
     fn push(&mut self, index: usize, audio: Audio, pause_after: Duration);
+    /// Drops every queued chunk that has not started playing; the one that
+    /// is playing plays to its end. Returns the index of the last chunk
+    /// that has started, if any has.
+    fn discard_pending(&mut self) -> Option<usize>;
     fn set_paused(&mut self, paused: bool);
     fn set_volume(&mut self, volume: f32);
+}
+
+/// Whether a queued chunk plays, decided once, by whichever comes first:
+/// its first sample being pulled, or [`AudioStream::discard_pending`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Fate {
+    Queued,
+    Started,
+    Discarded,
+}
+
+/// The chunks a stream has queued, as the stream sees them.
+#[derive(Default)]
+struct Queue {
+    chunks: Vec<(usize, Arc<Mutex<Fate>>)>,
+    last_started: Option<usize>,
+}
+
+impl Queue {
+    fn source(
+        &mut self,
+        index: usize,
+        audio: Audio,
+        pause_after: Duration,
+        on_event: &PlayCallback,
+    ) -> ChunkSource {
+        let fate = Arc::new(Mutex::new(Fate::Queued));
+        self.chunks.push((index, fate.clone()));
+        ChunkSource::new(index, audio, pause_after, fate, on_event.clone())
+    }
+
+    fn discard_pending(&mut self) -> Option<usize> {
+        for (index, fate) in self.chunks.drain(..) {
+            let mut fate = fate.lock().unwrap();
+            match *fate {
+                Fate::Queued => *fate = Fate::Discarded,
+                Fate::Started => self.last_started = Some(index),
+                Fate::Discarded => {}
+            }
+        }
+        self.last_started
+    }
 }
 
 /// A chunk as an audio source that reports when it starts and ends.
@@ -42,7 +88,10 @@ struct ChunkSource {
     samples: std::vec::IntoIter<f32>,
     silence_left: usize,
     sample_rate: u32,
-    started: bool,
+    /// Shared with the stream's [`Queue`] until the fate is decided; after
+    /// that, `decided` holds it so no sample takes the lock.
+    fate: Arc<Mutex<Fate>>,
+    decided: Fate,
     finished: bool,
     /// Report `Finished` as soon as the last sample is pulled. The capture
     /// backend turns this off to record the chunk first.
@@ -51,14 +100,21 @@ struct ChunkSource {
 }
 
 impl ChunkSource {
-    fn new(index: usize, audio: Audio, pause_after: Duration, on_event: PlayCallback) -> Self {
+    fn new(
+        index: usize,
+        audio: Audio,
+        pause_after: Duration,
+        fate: Arc<Mutex<Fate>>,
+        on_event: PlayCallback,
+    ) -> Self {
         let silence_left = (pause_after.as_secs_f64() * audio.sample_rate as f64) as usize;
         Self {
             index,
             sample_rate: audio.sample_rate,
             samples: audio.samples.into_iter(),
             silence_left,
-            started: false,
+            fate,
+            decided: Fate::Queued,
             finished: false,
             auto_finish: true,
             on_event,
@@ -66,7 +122,7 @@ impl ChunkSource {
     }
 
     fn finish(&mut self) {
-        if !self.finished {
+        if self.decided == Fate::Started && !self.finished {
             self.finished = true;
             (self.on_event)(PlayEvent::Finished(self.index));
         }
@@ -77,9 +133,20 @@ impl Iterator for ChunkSource {
     type Item = f32;
 
     fn next(&mut self) -> Option<f32> {
-        if !self.started {
-            self.started = true;
-            (self.on_event)(PlayEvent::Started(self.index));
+        if self.decided == Fate::Queued {
+            self.decided = {
+                let mut fate = self.fate.lock().unwrap();
+                if *fate == Fate::Queued {
+                    *fate = Fate::Started;
+                }
+                *fate
+            };
+            if self.decided == Fate::Started {
+                (self.on_event)(PlayEvent::Started(self.index));
+            }
+        }
+        if self.decided == Fate::Discarded {
+            return None;
         }
         if let Some(sample) = self.samples.next() {
             return Some(sample);
@@ -95,7 +162,11 @@ impl Iterator for ChunkSource {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let left = self.samples.len() + self.silence_left;
+        let left = if self.decided == Fate::Discarded {
+            0
+        } else {
+            self.samples.len() + self.silence_left
+        };
         (left, Some(left))
     }
 }
@@ -126,6 +197,7 @@ struct SystemStream {
     player: rodio::Player,
     // Declared after `player` so the device outlives the queue feeding it.
     _device: rodio::MixerDeviceSink,
+    queue: Queue,
     on_event: PlayCallback,
 }
 
@@ -137,6 +209,7 @@ impl AudioBackend for SystemAudio {
         Ok(Box::new(SystemStream {
             player,
             _device: device,
+            queue: Queue::default(),
             on_event,
         }))
     }
@@ -144,12 +217,12 @@ impl AudioBackend for SystemAudio {
 
 impl AudioStream for SystemStream {
     fn push(&mut self, index: usize, audio: Audio, pause_after: Duration) {
-        self.player.append(ChunkSource::new(
-            index,
-            audio,
-            pause_after,
-            self.on_event.clone(),
-        ));
+        let source = self.queue.source(index, audio, pause_after, &self.on_event);
+        self.player.append(source);
+    }
+
+    fn discard_pending(&mut self) -> Option<usize> {
+        self.queue.discard_pending()
     }
 
     fn set_paused(&mut self, paused: bool) {
@@ -240,7 +313,8 @@ impl Pacer {
 }
 
 struct CaptureStream {
-    queue: std::sync::mpsc::Sender<ChunkSource>,
+    sender: std::sync::mpsc::Sender<ChunkSource>,
+    queue: Queue,
     paused: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     on_event: PlayCallback,
@@ -302,7 +376,7 @@ impl AudioBackend for CaptureAudio {
                 }
                 // Record before reporting the end, so a listener that reacts
                 // to `Finished` already sees the audio.
-                if keep {
+                if keep && !samples.is_empty() {
                     played.lock().unwrap().push(Audio {
                         samples,
                         sample_rate,
@@ -312,7 +386,8 @@ impl AudioBackend for CaptureAudio {
             }
         });
         Ok(Box::new(CaptureStream {
-            queue,
+            sender: queue,
+            queue: Queue::default(),
             paused,
             stop,
             on_event,
@@ -322,9 +397,13 @@ impl AudioBackend for CaptureAudio {
 
 impl AudioStream for CaptureStream {
     fn push(&mut self, index: usize, audio: Audio, pause_after: Duration) {
-        let mut source = ChunkSource::new(index, audio, pause_after, self.on_event.clone());
+        let mut source = self.queue.source(index, audio, pause_after, &self.on_event);
         source.auto_finish = false;
-        let _ = self.queue.send(source);
+        let _ = self.sender.send(source);
+    }
+
+    fn discard_pending(&mut self) -> Option<usize> {
+        self.queue.discard_pending()
     }
 
     fn set_paused(&mut self, paused: bool) {

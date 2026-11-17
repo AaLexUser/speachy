@@ -11,13 +11,18 @@
 //!
 //! Speech starts as soon as the first (short) chunk is ready; later chunks
 //! are already queued by the time they are needed.
+//!
+//! Speed is applied at synthesis, so changing it mid-speech throws away
+//! what was prepared at the old speed: the chunk that is playing plays out,
+//! and a new worker synthesizes from the one after it. Each worker is one
+//! epoch; results of an earlier epoch are ignored.
 
 use crate::audio::{AudioBackend, AudioStream, PlayEvent};
 use crate::engine::{Audio, EngineProvider, SynthRequest};
 use crate::plan::PlannedChunk;
 use crate::text::Boundary;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
@@ -100,9 +105,11 @@ enum Msg {
     Stop,
     Pause(bool),
     Volume(f32),
+    Speed(f32),
     /// The worker is about to load a model.
     Loading,
     Synth {
+        epoch: u64,
         index: usize,
         result: anyhow::Result<Option<Audio>>,
         synth_secs: f32,
@@ -112,7 +119,6 @@ enum Msg {
 
 struct Current {
     id: u64,
-    cancel: Arc<AtomicBool>,
     tx: Sender<Msg>,
     text: String,
     paused: bool,
@@ -183,7 +189,6 @@ impl Speaker {
     pub fn speak(&self, plan: Vec<PlannedChunk>, opts: SpeakOptions) -> u64 {
         let inner = &self.inner;
         let id = inner.next_session.fetch_add(1, Ordering::Relaxed);
-        let cancel = Arc::new(AtomicBool::new(false));
         let (tx, rx) = channel();
         let text = plan
             .iter()
@@ -193,7 +198,6 @@ impl Speaker {
         {
             let mut current = inner.current.lock().unwrap();
             if let Some(old) = current.take() {
-                old.cancel.store(true, Ordering::Relaxed);
                 let _ = old.tx.send(Msg::Stop);
                 (inner.listener)(&SpeechEvent::Finished {
                     session: old.id,
@@ -203,7 +207,6 @@ impl Speaker {
             }
             *current = Some(Current {
                 id,
-                cancel: cancel.clone(),
                 tx: tx.clone(),
                 text,
                 paused: false,
@@ -220,7 +223,7 @@ impl Speaker {
             .name("speachy-session".into())
             .spawn(move || {
                 let _running = running;
-                run_session(inner, id, plan, opts, cancel, tx, rx)
+                run_session(inner, id, plan, opts, tx, rx)
             })
             .expect("spawn session thread");
         id
@@ -230,7 +233,6 @@ impl Speaker {
     pub fn stop(&self) -> bool {
         match &*self.inner.current.lock().unwrap() {
             Some(current) => {
-                current.cancel.store(true, Ordering::Relaxed);
                 let _ = current.tx.send(Msg::Stop);
                 true
             }
@@ -262,6 +264,13 @@ impl Speaker {
     pub fn set_volume(&self, volume: f32) {
         if let Some(current) = &*self.inner.current.lock().unwrap() {
             let _ = current.tx.send(Msg::Volume(volume));
+        }
+    }
+
+    /// Speaks every chunk after the one playing at `speed`.
+    pub fn set_speed(&self, speed: f32) {
+        if let Some(current) = &*self.inner.current.lock().unwrap() {
+            let _ = current.tx.send(Msg::Speed(speed));
         }
     }
 
@@ -378,51 +387,88 @@ impl Gate {
     }
 }
 
-fn synthesis_worker(
-    engines: Arc<dyn EngineProvider>,
-    plan: Vec<PlannedChunk>,
-    speed: f32,
-    lookahead: f32,
-    gate: Arc<Gate>,
+/// A synthesis worker of one epoch. Dropping it cancels the worker.
+struct Worker {
+    epoch: u64,
     cancel: Arc<AtomicBool>,
-    tx: Sender<Msg>,
-) {
-    for (index, chunk) in plan.iter().enumerate() {
-        if !gate.wait_below(lookahead, &cancel) {
-            return;
-        }
-        if !engines.is_loaded(&chunk.engine) {
-            let _ = tx.send(Msg::Loading);
-        }
-        let started = Instant::now();
-        let request = SynthRequest {
-            text: &chunk.text,
-            sid: chunk.sid,
-            speed,
-            lang: &chunk.lang,
+    gate: Arc<Gate>,
+}
+
+impl Worker {
+    /// Synthesizes `plan` at `speed` from chunk `from` on, running ahead of
+    /// playback until `lookahead` seconds of audio are waiting.
+    fn start(
+        inner: &Arc<Inner>,
+        plan: &Arc<[PlannedChunk]>,
+        from: usize,
+        speed: f32,
+        lookahead: f32,
+        epoch: u64,
+        tx: &Sender<Msg>,
+    ) -> Self {
+        let worker = Self {
+            epoch,
+            cancel: Arc::default(),
+            gate: Arc::default(),
         };
-        let result = engines
-            .engine(&chunk.engine)
-            .and_then(|engine| engine.synthesize(&request, &cancel));
-        let synth_secs = started.elapsed().as_secs_f32();
-        if cancel.load(Ordering::Relaxed) {
-            return;
-        }
-        // Count the audio as waiting before the session thread sees it, so
-        // the next iteration cannot slip past the gate.
-        if let Ok(Some(audio)) = &result {
-            gate.add(audio.seconds());
-        }
-        if tx
-            .send(Msg::Synth {
-                index,
-                result,
-                synth_secs,
+        let (engines, plan, gate, cancel, tx) = (
+            inner.engines.clone(),
+            plan.clone(),
+            worker.gate.clone(),
+            worker.cancel.clone(),
+            tx.clone(),
+        );
+        let running = Running::new(inner);
+        std::thread::Builder::new()
+            .name("speachy-synth".into())
+            .spawn(move || {
+                let _running = running;
+                for (index, chunk) in plan.iter().enumerate().skip(from) {
+                    if !gate.wait_below(lookahead, &cancel) {
+                        return;
+                    }
+                    if !engines.is_loaded(&chunk.engine) {
+                        let _ = tx.send(Msg::Loading);
+                    }
+                    let started = Instant::now();
+                    let request = SynthRequest {
+                        text: &chunk.text,
+                        sid: chunk.sid,
+                        speed,
+                        lang: &chunk.lang,
+                    };
+                    let result = engines
+                        .engine(&chunk.engine)
+                        .and_then(|engine| engine.synthesize(&request, &cancel));
+                    let synth_secs = started.elapsed().as_secs_f32();
+                    if cancel.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    // Count the audio as waiting before the session thread
+                    // sees it, so the next iteration cannot slip past the gate.
+                    if let Ok(Some(audio)) = &result {
+                        gate.add(audio.seconds());
+                    }
+                    let msg = Msg::Synth {
+                        epoch,
+                        index,
+                        result,
+                        synth_secs,
+                    };
+                    if tx.send(msg).is_err() {
+                        return;
+                    }
+                }
             })
-            .is_err()
-        {
-            return;
-        }
+            .expect("spawn synthesis thread");
+        worker
+    }
+}
+
+impl Drop for Worker {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+        self.gate.changed.notify_all();
     }
 }
 
@@ -431,33 +477,15 @@ fn run_session(
     id: u64,
     plan: Vec<PlannedChunk>,
     opts: SpeakOptions,
-    cancel: Arc<AtomicBool>,
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
 ) {
     let started = Instant::now();
     let total = plan.len();
-    let gate = Arc::new(Gate::default());
-    let speed = opts.speed.clamp(0.25, 4.0);
-
-    {
-        let (engines, plan, gate, cancel, tx) = (
-            inner.engines.clone(),
-            plan.clone(),
-            gate.clone(),
-            cancel.clone(),
-            tx.clone(),
-        );
-        let lookahead = opts.lookahead.as_secs_f32();
-        let running = Running::new(&inner);
-        std::thread::Builder::new()
-            .name("speachy-synth".into())
-            .spawn(move || {
-                let _running = running;
-                synthesis_worker(engines, plan, speed, lookahead, gate, cancel, tx)
-            })
-            .expect("spawn synthesis thread");
-    }
+    let plan: Arc<[PlannedChunk]> = plan.into();
+    let lookahead = opts.lookahead.as_secs_f32();
+    let mut speed = playable(opts.speed);
+    let mut worker = Worker::start(&inner, &plan, 0, speed, lookahead, 0, &tx);
 
     // The device is opened while the first chunk is being synthesized.
     let play_tx = tx.clone();
@@ -467,7 +495,7 @@ fn run_session(
     let mut stream: Box<dyn AudioStream> = match opened {
         Ok(stream) => stream,
         Err(err) => {
-            cancel.store(true, Ordering::Relaxed);
+            drop(worker);
             inner.finish(id, Outcome::Failed, Some(format!("{err:#}")));
             return;
         }
@@ -476,14 +504,15 @@ fn run_session(
 
     // Audio seconds of chunks that are queued but have not started playing.
     let mut waiting: HashMap<usize, f32> = HashMap::new();
-    let mut done = 0;
+    // Chunks that have neither finished playing nor been skipped.
+    let mut unresolved: BTreeSet<usize> = (0..total).collect();
     let mut playing = false;
     let mut ever_played = false;
     let mut paused = false;
     let mut failure: Option<String> = None;
 
     let outcome = loop {
-        if done == total {
+        if unresolved.is_empty() {
             break Outcome::Completed;
         }
         let Ok(msg) = rx.recv() else {
@@ -502,15 +531,30 @@ fn run_session(
                 inner.if_current(id, |inner| inner.set_state(state));
             }
             Msg::Volume(volume) => stream.set_volume(volume),
+            Msg::Speed(new) => {
+                let new = playable(new);
+                if new == speed {
+                    continue;
+                }
+                speed = new;
+                let from = stream.discard_pending().map_or(0, |last| last + 1);
+                // Whatever was waiting either has started or is gone.
+                waiting.clear();
+                unresolved.extend(from..total);
+                worker =
+                    Worker::start(&inner, &plan, from, speed, lookahead, worker.epoch + 1, &tx);
+            }
             Msg::Loading => {
                 if !playing && !paused {
                     inner.if_current(id, |inner| inner.set_state(State::Loading));
                 }
             }
+            Msg::Synth { epoch, .. } if epoch != worker.epoch => {}
             Msg::Synth {
                 index,
                 result,
                 synth_secs,
+                ..
             } => {
                 let raw_secs = match &result {
                     Ok(Some(audio)) => audio.seconds(),
@@ -531,8 +575,8 @@ fn run_session(
                 if audio.samples.is_empty() {
                     // Nothing to play for this chunk: release its share of
                     // the look-ahead budget and move on.
-                    gate.add(-raw_secs);
-                    done += 1;
+                    worker.gate.add(-raw_secs);
+                    unresolved.remove(&index);
                     continue;
                 }
                 if index == 0 {
@@ -567,13 +611,13 @@ fn run_session(
                 // Only now may the worker synthesize further ahead: progress
                 // is reported before the work it unlocks begins.
                 if let Some(secs) = waiting.remove(&index) {
-                    gate.add(-secs);
+                    worker.gate.add(-secs);
                 }
             }
-            Msg::Play(PlayEvent::Finished(_)) => {
-                done += 1;
+            Msg::Play(PlayEvent::Finished(index)) => {
+                unresolved.remove(&index);
                 // Playback ran dry before the next chunk was ready.
-                if waiting.is_empty() && done < total {
+                if waiting.is_empty() && !unresolved.is_empty() {
                     playing = false;
                     if !paused {
                         inner.if_current(id, |inner| inner.set_state(State::Preparing));
@@ -583,8 +627,7 @@ fn run_session(
         }
     };
 
-    cancel.store(true, Ordering::Relaxed);
-    gate.changed.notify_all();
+    drop(worker);
     drop(stream);
     match (outcome, failure) {
         // Every chunk failed, or the text ended without any audio.
@@ -593,6 +636,11 @@ fn run_session(
         }
         (outcome, _) => inner.finish(id, outcome, None),
     }
+}
+
+/// The speed range the pipeline synthesizes at.
+fn playable(speed: f32) -> f32 {
+    speed.clamp(0.25, 4.0)
 }
 
 /// Silence inserted after a chunk, on top of what the model produced.
