@@ -11,7 +11,7 @@ const PAUSE = '<path d="M2.5 1.5h2.4v9H2.5zm4.6 0h2.4v9H7.1z" />';
 const PLAY = '<path d="M3 1.5v9L10.5 6z" />';
 const TEXT = { loading: "Loading voice…", preparing: "Preparing…", paused: "Paused" };
 
-const view = { state: "idle", session: null, chunks: [], playing: -1, notice: null };
+const view = { state: "idle", session: null, chunks: [], playing: -1, notice: null, speed: null };
 let noticeTimer;
 
 function render() {
@@ -28,6 +28,26 @@ function render() {
   }
   // The pill shows one line; the whole text is there on hover.
   label.title = label.textContent;
+  renderSpeed();
+}
+
+/** 1.0×, 1.2×, 1.25×: as the engine's speed notices write it. */
+function speedText(speed) {
+  const hundredths = Math.round(speed * 100);
+  return (hundredths / 100).toFixed(hundredths % 10 === 0 ? 1 : 2) + "×";
+}
+
+// The speed, which is also the reset button: at 1.0, it goes back.
+function renderSpeed() {
+  const button = document.getElementById("speed");
+  const settings = view.speed;
+  button.hidden = !settings;
+  if (!settings) return;
+  const normal = Math.round(settings.speed * 100) === 100;
+  const target = normal ? settings.speed_before_reset : 1;
+  button.textContent = speedText(settings.speed);
+  button.title = `Back to ${speedText(target)}`;
+  button.setAttribute("aria-label", `Speed ${speedText(settings.speed)}. ${button.title}`);
 }
 
 // --- The bars -------------------------------------------------------------
@@ -158,7 +178,18 @@ listen("notice", ({ payload }) => {
   render();
 });
 
+listen("settings", ({ payload }) => {
+  view.speed = { speed: payload.speed, speed_before_reset: payload.speed_before_reset };
+  renderSpeed();
+});
+
 const engine = (cmd) => invoke("engine", { command: { cmd } });
 document.getElementById("pause").addEventListener("click", () => engine("toggle_pause"));
 document.getElementById("stop").addEventListener("click", () => engine("stop"));
+document.getElementById("speed").addEventListener("click", () => engine("reset_speed"));
 render();
+engine("snapshot").then(({ settings }) => {
+  // A settings event may already have brought a newer speed.
+  view.speed ??= { speed: settings.speed, speed_before_reset: settings.speed_before_reset };
+  renderSpeed();
+});
