@@ -17,6 +17,9 @@ home=$(mktemp -d)
 log="$out/app.log"
 
 keys() { osascript -e "tell application \"System Events\" to keystroke \"$1\" using {$2}"; }
+# Presses a key by its position on the keyboard. `keystroke` types a
+# punctuation mark as text, which no shortcut sees.
+keycode() { osascript -e "tell application \"System Events\" to key code $1 using {$2}"; }
 shot() { screencapture -x "$out/$1.png" || echo "note: no screenshot for $1"; }
 
 # A voice to speak with.
@@ -51,7 +54,7 @@ sleep 2.5
 shot 3-pill-speaking
 
 # Faster, while it speaks: the pill shows the new speed.
-keys = "control down, option down"
+keycode 24 "control down, option down" # the = key
 sleep 0.8
 shot 4-pill-faster
 sleep 6
