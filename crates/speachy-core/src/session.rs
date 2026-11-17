@@ -129,6 +129,12 @@ pub enum Command {
     UpdateSettings {
         patch: Value,
     },
+    /// Make speech faster (`by` > 0) or slower, also while speaking.
+    ChangeSpeed {
+        by: f32,
+    },
+    /// Back to normal speed; at normal speed, back to the speed before.
+    ResetSpeed,
     /// Speak `text`. `voice` forces one voice; `lang` forces the language
     /// instead of detecting it.
     Speak {
@@ -433,16 +439,65 @@ impl Session {
     /// Applies a partial settings update (see [`Settings::merged`]), saves
     /// it and returns the new settings.
     pub fn update_settings(&self, patch: Value) -> Result<Settings, String> {
+        self.change_settings(|settings| settings.merged(patch))
+    }
+
+    /// Makes speech faster by `by` (slower if negative), to two decimals
+    /// and within the speeds settings allow. Returns the new speed.
+    pub fn change_speed(&self, by: f32) -> Result<f32, String> {
+        if !by.is_finite() {
+            return Err(format!("cannot change the speed by {by}"));
+        }
+        let new = self.change_settings(|settings| {
+            let mut new = settings.clone();
+            new.speed = hundredths(settings.speed + by);
+            new.sanitize();
+            Ok(new)
+        })?;
+        self.announce_speed(new.speed);
+        Ok(new.speed)
+    }
+
+    /// Resets the speed to 1.0 and remembers the speed it had; at 1.0,
+    /// goes back to the speed remembered. Returns the new speed.
+    pub fn reset_speed(&self) -> Result<f32, String> {
+        let new = self.change_settings(|settings| {
+            let mut new = settings.clone();
+            if hundredths(settings.speed) == 1.0 {
+                new.speed = settings.speed_before_reset;
+            } else {
+                new.speed_before_reset = settings.speed;
+                new.speed = 1.0;
+            }
+            Ok(new)
+        })?;
+        self.announce_speed(new.speed);
+        Ok(new.speed)
+    }
+
+    fn announce_speed(&self, speed: f32) {
+        self.emit(Event::Notice(format!("Speed {}", speed_label(speed))));
+    }
+
+    /// Saves the settings `change` makes, applies them to speech in
+    /// progress and announces them.
+    fn change_settings(
+        &self,
+        change: impl FnOnce(&Settings) -> Result<Settings, String>,
+    ) -> Result<Settings, String> {
         let inner = &self.inner;
         let (old, new) = {
             let mut settings = inner.settings.write().unwrap();
-            let new = settings.merged(patch)?;
+            let new = change(&settings)?;
             new.save(&inner.paths.settings_file)
                 .map_err(|err| format!("could not save settings: {err}"))?;
             (std::mem::replace(&mut *settings, new.clone()), new)
         };
         if new.volume != old.volume {
             inner.speaker.set_volume(new.volume);
+        }
+        if new.speed != old.speed {
+            inner.speaker.set_speed(new.speed);
         }
         if new.default_voice != old.default_voice || (new.preload_model && !old.preload_model) {
             self.preload();
@@ -620,6 +675,8 @@ impl Session {
                 let settings = self.update_settings(patch)?;
                 Ok(json!({ "settings": to_json(&settings)? }))
             }
+            Command::ChangeSpeed { by } => Ok(json!({ "speed": exact(self.change_speed(by)?) })),
+            Command::ResetSpeed => Ok(json!({ "speed": exact(self.reset_speed()?) })),
             Command::Speak { text, voice, lang } => {
                 let session = self.speak(&text, voice, lang)?;
                 Ok(json!({ "session": session }))
@@ -663,6 +720,27 @@ impl Session {
         let command: Command =
             serde_json::from_value(command).map_err(|err| format!("invalid command: {err}"))?;
         self.dispatch(command)
+    }
+}
+
+/// `value` rounded to two decimals.
+fn hundredths(value: f32) -> f32 {
+    (value * 100.0).round() / 100.0
+}
+
+/// A two-decimal speed as the decimal it stands for, so JSON reads 1.1
+/// rather than the nearest `f32`, 1.100000023841858.
+fn exact(speed: f32) -> f64 {
+    (speed as f64 * 100.0).round() / 100.0
+}
+
+/// A speed as a listener reads it: `1.0×`, `1.2×`, `1.25×`.
+fn speed_label(speed: f32) -> String {
+    let hundredths = (speed * 100.0).round() as i64;
+    if hundredths % 10 == 0 {
+        format!("{:.1}×", speed)
+    } else {
+        format!("{:.2}×", speed)
     }
 }
 
