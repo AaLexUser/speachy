@@ -4,7 +4,7 @@ members = ["crates/speachy-core", "crates/speachy-cli", "src-tauri"]
 default-members = ["crates/speachy-core", "crates/speachy-cli"]
 
 [workspace.package]
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 repository = "https://github.com/AaLexUser/speachy"
 
