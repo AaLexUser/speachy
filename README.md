@@ -15,7 +15,13 @@ bottom of the screen shows what is being read.
 - **Speak the selection.** Press <kbd>⌃</kbd><kbd>⌥</kbd><kbd>S</kbd> with
   text selected anywhere. Press it again to stop, or select something else and
   press it to switch. <kbd>⌃</kbd><kbd>⌥</kbd><kbd>P</kbd> pauses and resumes,
-  <kbd>⌃</kbd><kbd>⌥</kbd><kbd>X</kbd> stops. All three can be changed.
+  <kbd>⌃</kbd><kbd>⌥</kbd><kbd>X</kbd> stops.
+- **Change the speed while it reads.** <kbd>⌃</kbd><kbd>⌥</kbd><kbd>=</kbd>
+  is faster, <kbd>⌃</kbd><kbd>⌥</kbd><kbd>-</kbd> slower, in steps of 0.1.
+  The sentence being read finishes and the next one has the new speed.
+  <kbd>⌃</kbd><kbd>⌥</kbd><kbd>0</kbd> goes back to normal speed, and pressed
+  again, back to yours. The pill shows the speed; clicking it does the same.
+  The speed is remembered. Every shortcut can be changed.
 - **Starts quickly, never waits.** Text is split into chunks. The first one is
   short, so speech starts as soon as it is synthesized; the following ones are
   synthesized ahead of playback and queued back to back, so there are no gaps

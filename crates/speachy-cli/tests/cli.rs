@@ -160,6 +160,21 @@ fn raw_commands_run_like_the_app_sends_them() {
 }
 
 #[test]
+fn speed_commands_answer_with_the_new_speed() {
+    let home = tempfile::tempdir().unwrap();
+    let faster = cli(
+        home.path(),
+        &["run", r#"{"cmd":"change_speed","by":0.1}"#],
+        None,
+    );
+    assert_eq!(json(&faster), serde_json::json!({ "speed": 1.1 }));
+
+    let fresh = tempfile::tempdir().unwrap();
+    let reset = cli(fresh.path(), &["run", r#"{"cmd":"reset_speed"}"#], None);
+    assert_eq!(json(&reset), serde_json::json!({ "speed": 1.0 }));
+}
+
+#[test]
 fn serve_answers_each_line_and_echoes_ids() {
     let home = tempfile::tempdir().unwrap();
     let input = concat!(

@@ -30,6 +30,9 @@ pub fn engine(app: AppHandle, state: State<AppState>, command: Value) -> Result<
         &new.shortcuts.speak_selection,
         &new.shortcuts.pause_resume,
         &new.shortcuts.stop,
+        &new.shortcuts.faster,
+        &new.shortcuts.slower,
+        &new.shortcuts.reset_speed,
     ] {
         shortcuts::validate(keys)?;
     }

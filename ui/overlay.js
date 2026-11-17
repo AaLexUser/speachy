@@ -11,7 +11,7 @@ const PAUSE = '<path d="M2.5 1.5h2.4v9H2.5zm4.6 0h2.4v9H7.1z" />';
 const PLAY = '<path d="M3 1.5v9L10.5 6z" />';
 const TEXT = { loading: "Loading voice…", preparing: "Preparing…", paused: "Paused" };
 
-const view = { state: "idle", session: null, chunks: [], playing: -1, notice: null };
+const view = { state: "idle", session: null, chunks: [], playing: -1, notice: null, speed: null };
 let noticeTimer;
 
 function render() {
@@ -28,6 +28,27 @@ function render() {
   }
   // The pill shows one line; the whole text is there on hover.
   label.title = label.textContent;
+  renderSpeed();
+}
+
+/** 1.0×, 1.2×, 1.25× */
+function speedText(speed) {
+  const hundredths = Math.round(speed * 100);
+  return (hundredths / 100).toFixed(hundredths % 10 === 0 ? 1 : 2) + "×";
+}
+
+// The speed, which is also the reset button: at 1.0, it goes back.
+function renderSpeed() {
+  const button = document.getElementById("speed");
+  const settings = view.speed;
+  button.hidden = !settings;
+  if (!settings) return;
+  const normal = Math.round(settings.speed * 100) === 100;
+  const target = normal ? settings.speed_before_reset : 1;
+  button.textContent = speedText(settings.speed);
+  const back = target === settings.speed ? "" : `Back to ${speedText(target)}`;
+  button.title = back || "Speed";
+  button.setAttribute("aria-label", `Speed ${speedText(settings.speed)}. ${back}`.trim());
 }
 
 // --- The bars -------------------------------------------------------------
@@ -148,17 +169,34 @@ listen("speech", ({ payload: e }) => {
   animate();
 });
 
-listen("notice", ({ payload }) => {
-  view.notice = payload;
+// Puts `text` on the label for a moment.
+function flash(text) {
+  view.notice = text;
   clearTimeout(noticeTimer);
   noticeTimer = setTimeout(() => {
     view.notice = null;
     render();
   }, 2400);
   render();
+}
+
+listen("notice", ({ payload }) => flash(payload));
+
+listen("settings", ({ payload }) => {
+  const changed = view.speed && view.speed.speed !== payload.speed;
+  view.speed = { speed: payload.speed, speed_before_reset: payload.speed_before_reset };
+  // The readout has the number; the label says what changed.
+  if (changed) flash("Speed");
+  else renderSpeed();
 });
 
 const engine = (cmd) => invoke("engine", { command: { cmd } });
 document.getElementById("pause").addEventListener("click", () => engine("toggle_pause"));
 document.getElementById("stop").addEventListener("click", () => engine("stop"));
+document.getElementById("speed").addEventListener("click", () => engine("reset_speed"));
 render();
+engine("snapshot").then(({ settings }) => {
+  // A settings event may already have brought a newer speed.
+  view.speed ??= { speed: settings.speed, speed_before_reset: settings.speed_before_reset };
+  renderSpeed();
+});

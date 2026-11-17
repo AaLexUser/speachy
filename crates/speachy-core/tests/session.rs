@@ -11,19 +11,25 @@ use std::sync::mpsc::{channel, Receiver};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// Speaks every request as a short tone and remembers what it was asked.
+/// Speaks every request as a tone, 10 ms per character at speed 1, and
+/// remembers what it was asked.
 #[derive(Default)]
 struct FakeEngines {
-    requests: Mutex<Vec<(String, String, i32)>>, // (text, lang, sid)
+    requests: Mutex<Vec<(String, String, i32, f32)>>, // (text, lang, sid, speed)
     unloaded: Mutex<Vec<String>>,
 }
 
 impl Synthesizer for FakeEngines {
     fn synthesize(&self, req: &SynthRequest, _: &Arc<AtomicBool>) -> anyhow::Result<Option<Audio>> {
-        let request = (req.text.to_string(), req.lang.to_string(), req.sid);
+        let request = (
+            req.text.to_string(),
+            req.lang.to_string(),
+            req.sid,
+            req.speed,
+        );
         self.requests.lock().unwrap().push(request);
         Ok(Some(Audio {
-            samples: vec![0.1; 100],
+            samples: vec![0.1; (req.text.len() as f32 * 10.0 / req.speed) as usize],
             sample_rate: 1000,
         }))
     }
@@ -54,6 +60,11 @@ struct Rig {
 
 /// A session in a fresh directory where `installed` models appear installed.
 fn rig(installed: &[&str]) -> Rig {
+    rig_playing_at(installed, f32::INFINITY)
+}
+
+/// Like [`rig`], with speech played at `time_scale` times real time.
+fn rig_playing_at(installed: &[&str], time_scale: f32) -> Rig {
     let home = tempfile::tempdir().unwrap();
     let paths = Paths::under(home.path());
     for id in installed {
@@ -67,7 +78,7 @@ fn rig(installed: &[&str]) -> Rig {
     let session = Session::with_engines(
         paths,
         Arc::new(Provider(engines.clone())),
-        Arc::new(CaptureAudio::discarding(f32::INFINITY)),
+        Arc::new(CaptureAudio::discarding(time_scale)),
         move |event| {
             let _ = tx.lock().unwrap().send(event.clone());
         },
@@ -292,4 +303,124 @@ fn commands_and_events_have_a_stable_json_shape() {
         event,
         json!({ "event": "speech", "data": { "type": "chunk_playing", "session": 3, "index": 1 } })
     );
+}
+
+const LONG: &str = "One sentence to read. Another one follows it. Then a third. \
+    And a fourth. A fifth comes next. The sixth one now. Seventh. \
+    The eighth is here. Ninth of them. And the tenth ends it.";
+
+impl Rig {
+    /// Runs a speed command and returns the speed it answered, once the
+    /// settings event with that speed has arrived.
+    fn speed_command(&self, command: Value) -> f64 {
+        let speed = self.run(command).unwrap()["speed"].as_f64().unwrap();
+        self.events_until(|e| matches!(e, Event::Settings(s) if s.speed == speed as f32));
+        speed
+    }
+
+    /// Speaks [`LONG`], runs `command` while it is heard, and returns the
+    /// speeds the synthesizer was asked for, in order.
+    fn speeds_around(&self, command: Value) -> Vec<f32> {
+        self.run(json!({ "cmd": "speak", "text": LONG })).unwrap();
+        self.events_until(|e| matches!(e, Event::Speech(SpeechEvent::ChunkPlaying { .. })));
+        self.run(json!({ "cmd": "pause" })).unwrap();
+        self.run(command).unwrap();
+        self.run(json!({ "cmd": "resume" })).unwrap();
+        self.run(json!({ "cmd": "wait" })).unwrap();
+        let requests = self.engines.requests.lock().unwrap();
+        requests.iter().map(|r| r.3).collect()
+    }
+}
+
+#[test]
+fn change_speed_steps_rounds_and_clamps() {
+    let rig = rig(&["supertonic-3"]);
+    let speed = |command: Value| rig.speed_command(command);
+    assert_eq!(speed(json!({ "cmd": "change_speed", "by": 0.1 })), 1.1);
+    assert_eq!(rig.session.settings().speed, 1.1);
+    assert_eq!(speed(json!({ "cmd": "change_speed", "by": 0.15 })), 1.25);
+
+    rig.run(json!({ "cmd": "update_settings", "patch": { "speed": 2.5 } }))
+        .unwrap();
+    assert_eq!(speed(json!({ "cmd": "change_speed", "by": 0.1 })), 2.5);
+
+    rig.run(json!({ "cmd": "update_settings", "patch": { "speed": 0.5 } }))
+        .unwrap();
+    assert_eq!(speed(json!({ "cmd": "change_speed", "by": -0.1 })), 0.5);
+
+    // Saved: a session opened on the same directory has it.
+    let reopened = Session::with_engines(
+        rig.session.paths().clone(),
+        Arc::new(Provider(rig.engines.clone())),
+        Arc::new(CaptureAudio::discarding(f32::INFINITY)),
+        |_| {},
+    );
+    assert_eq!(reopened.settings().speed, 0.5);
+}
+
+#[test]
+fn a_speed_set_in_the_settings_reaches_speech_in_progress() {
+    let rig = rig_playing_at(&["supertonic-3"], 1.0);
+    let speeds = rig.speeds_around(json!({ "cmd": "update_settings", "patch": { "speed": 1.5 } }));
+    assert_eq!(speeds.first(), Some(&1.0), "{speeds:?}");
+    assert_eq!(speeds.last(), Some(&1.5), "{speeds:?}");
+}
+
+#[test]
+fn reset_speed_goes_to_normal_and_back() {
+    let rig = rig(&["supertonic-3"]);
+    rig.run(json!({ "cmd": "update_settings", "patch": { "speed": 1.3 } }))
+        .unwrap();
+    for expected in [1.0, 1.3, 1.0] {
+        assert_eq!(rig.speed_command(json!({ "cmd": "reset_speed" })), expected);
+    }
+}
+
+#[test]
+fn reset_speed_at_normal_speed_with_nothing_remembered_stays_normal() {
+    let rig = rig(&["supertonic-3"]);
+    assert_eq!(rig.speed_command(json!({ "cmd": "reset_speed" })), 1.0);
+}
+
+#[test]
+fn reset_speed_goes_back_to_the_speed_changed_to_after_a_reset() {
+    let rig = rig(&["supertonic-3"]);
+    rig.run(json!({ "cmd": "update_settings", "patch": { "speed": 1.3 } }))
+        .unwrap();
+    let speed = |command: Value| rig.speed_command(command);
+    assert_eq!(speed(json!({ "cmd": "reset_speed" })), 1.0);
+    assert_eq!(speed(json!({ "cmd": "change_speed", "by": 0.1 })), 1.1);
+    assert_eq!(speed(json!({ "cmd": "reset_speed" })), 1.0);
+    assert_eq!(speed(json!({ "cmd": "reset_speed" })), 1.1);
+}
+
+#[test]
+fn the_speed_and_the_speed_before_a_reset_are_remembered() {
+    let rig = rig(&["supertonic-3"]);
+    rig.run(json!({ "cmd": "update_settings", "patch": { "speed": 1.7 } }))
+        .unwrap();
+    rig.run(json!({ "cmd": "reset_speed" })).unwrap();
+    let paths = rig.session.paths().clone();
+    rig.session.shutdown(Duration::from_secs(5));
+    drop(rig.session);
+
+    let reopened = Session::with_engines(
+        paths,
+        Arc::new(Provider(rig.engines.clone())),
+        Arc::new(CaptureAudio::discarding(f32::INFINITY)),
+        |_| {},
+    );
+    assert_eq!(reopened.settings().speed, 1.0);
+    assert_eq!(reopened.settings().speed_before_reset, 1.7);
+    assert_eq!(reopened.reset_speed(), Ok(1.7));
+}
+
+#[test]
+fn reset_speed_reaches_speech_in_progress() {
+    let rig = rig_playing_at(&["supertonic-3"], 1.0);
+    rig.run(json!({ "cmd": "update_settings", "patch": { "speed": 1.4 } }))
+        .unwrap();
+    let speeds = rig.speeds_around(json!({ "cmd": "reset_speed" }));
+    assert_eq!(speeds.first(), Some(&1.4), "{speeds:?}");
+    assert_eq!(speeds.last(), Some(&1.0), "{speeds:?}");
 }

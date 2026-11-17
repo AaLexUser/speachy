@@ -19,6 +19,10 @@ pub struct Shortcuts {
     pub speak_selection: String,
     pub pause_resume: String,
     pub stop: String,
+    pub faster: String,
+    pub slower: String,
+    /// Back to normal speed; pressed again, back to the speed before.
+    pub reset_speed: String,
 }
 
 impl Default for Shortcuts {
@@ -27,6 +31,9 @@ impl Default for Shortcuts {
             speak_selection: "Ctrl+Alt+S".into(),
             pause_resume: "Ctrl+Alt+P".into(),
             stop: "Ctrl+Alt+X".into(),
+            faster: "Ctrl+Alt+Equal".into(),
+            slower: "Ctrl+Alt+Minus".into(),
+            reset_speed: "Ctrl+Alt+Digit0".into(),
         }
     }
 }
@@ -45,6 +52,9 @@ pub struct Settings {
     pub language: String,
     /// Speech rate, 1.0 = the voice's natural pace.
     pub speed: f32,
+    /// The speed `reset_speed` goes back to when the speed is already 1.0:
+    /// the speed that was in use the last time it was reset.
+    pub speed_before_reset: f32,
     pub volume: f32,
     /// How many seconds of audio to synthesize ahead of playback.
     pub lookahead_secs: f32,
@@ -71,6 +81,7 @@ impl Default for Settings {
             auto_detect_language: true,
             language: "en".into(),
             speed: 1.0,
+            speed_before_reset: 1.0,
             volume: 1.0,
             lookahead_secs: 20.0,
             threads: 0,
@@ -141,6 +152,7 @@ impl Settings {
     pub fn sanitize(&mut self) {
         let finite = |v: f32, default: f32| if v.is_finite() { v } else { default };
         self.speed = finite(self.speed, 1.0).clamp(0.5, 2.5);
+        self.speed_before_reset = finite(self.speed_before_reset, 1.0).clamp(0.5, 2.5);
         self.volume = finite(self.volume, 1.0).clamp(0.0, 1.5);
         self.lookahead_secs = finite(self.lookahead_secs, 20.0).clamp(3.0, 120.0);
         self.threads = self.threads.min(32);
@@ -200,6 +212,16 @@ mod tests {
             loaded.shortcuts.speak_selection,
             Shortcuts::default().speak_selection
         );
+
+        // A file from before the speed shortcuts gets their defaults.
+        std::fs::write(&path, r#"{"speed": 1.3, "shortcuts": {"stop": "F9"}}"#).unwrap();
+        let loaded = Settings::load(&path);
+        assert_eq!(loaded.speed_before_reset, 1.0);
+        assert_eq!(loaded.shortcuts.faster, "Ctrl+Alt+Equal");
+        assert_eq!(loaded.shortcuts.slower, "Ctrl+Alt+Minus");
+        assert_eq!(loaded.shortcuts.reset_speed, "Ctrl+Alt+Digit0");
+        std::fs::write(&path, r#"{"speed_before_reset": 7}"#).unwrap();
+        assert_eq!(Settings::load(&path).speed_before_reset, 2.5);
 
         std::fs::write(&path, "{ not json").unwrap();
         assert_eq!(Settings::load(&path), Settings::default());

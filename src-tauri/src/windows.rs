@@ -9,7 +9,7 @@ use tauri::{
 pub const MAIN: &str = "main";
 pub const OVERLAY: &str = "overlay";
 
-const OVERLAY_WIDTH: f64 = 340.0;
+const OVERLAY_WIDTH: f64 = 380.0;
 const OVERLAY_HEIGHT: f64 = 56.0;
 /// Distance of the pill from the bottom of the screen's usable area (above
 /// the Dock or taskbar).

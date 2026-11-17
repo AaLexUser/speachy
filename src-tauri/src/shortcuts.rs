@@ -13,6 +13,9 @@ pub enum Action {
     SpeakSelection,
     PauseResume,
     Stop,
+    Faster,
+    Slower,
+    ResetSpeed,
 }
 
 /// The shortcuts currently registered with the system.
@@ -38,6 +41,9 @@ pub fn register_all(app: &AppHandle, shortcuts: &Shortcuts) -> Vec<String> {
             "Pause / resume",
         ),
         (&shortcuts.stop, Action::Stop, "Stop"),
+        (&shortcuts.faster, Action::Faster, "Faster"),
+        (&shortcuts.slower, Action::Slower, "Slower"),
+        (&shortcuts.reset_speed, Action::ResetSpeed, "Reset speed"),
     ];
     for (keys, action, label) in wanted {
         if keys.trim().is_empty() {
@@ -105,5 +111,19 @@ pub fn run(app: &AppHandle, action: Action) {
         Action::Stop => {
             session.stop();
         }
+        Action::Faster => speed_changed(app, session.change_speed(0.1)),
+        Action::Slower => speed_changed(app, session.change_speed(-0.1)),
+        Action::ResetSpeed => speed_changed(app, session.reset_speed()),
+    }
+}
+
+/// The pill shows the speed, so a change made by a shortcut brings it up.
+fn speed_changed(app: &AppHandle, result: Result<f32, String>) {
+    match result {
+        Ok(speed) => {
+            log::info!("speed: {speed}");
+            speech::show_pill_briefly(app);
+        }
+        Err(message) => speech::notice(app, &message),
     }
 }
