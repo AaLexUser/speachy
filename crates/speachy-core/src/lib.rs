@@ -22,6 +22,7 @@ pub mod numbers;
 pub mod output;
 pub mod pipeline;
 pub mod plan;
+pub mod russian;
 pub mod session;
 pub mod settings;
 pub mod text;
