@@ -9,14 +9,18 @@ use tauri::{AppHandle, Emitter, Manager};
 
 /// A short message for the user, shown by the pill and the settings window.
 pub fn notice(app: &AppHandle, message: &str) {
-    const SHOWN_FOR: Duration = Duration::from_millis(2500);
     log::info!("notice: {message}");
     let _ = app.emit("notice", message);
+    show_pill_briefly(app);
+}
+
+/// Brings the pill up for a moment, even when nothing is being spoken.
+pub fn show_pill_briefly(app: &AppHandle) {
+    const SHOWN_FOR: Duration = Duration::from_millis(2500);
     let state = app.state::<AppState>();
     if !state.session.settings().show_overlay {
         return;
     }
-    // Surface the message on the pill for a moment, even when idle.
     *state.notice_until.lock().unwrap() = Some(Instant::now() + SHOWN_FOR);
     crate::windows::show_overlay(app);
     let app = app.clone();

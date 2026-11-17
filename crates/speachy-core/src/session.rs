@@ -454,7 +454,6 @@ impl Session {
             new.sanitize();
             Ok(new)
         })?;
-        self.announce_speed(new.speed);
         Ok(new.speed)
     }
 
@@ -471,12 +470,7 @@ impl Session {
             }
             Ok(new)
         })?;
-        self.announce_speed(new.speed);
         Ok(new.speed)
-    }
-
-    fn announce_speed(&self, speed: f32) {
-        self.emit(Event::Notice(format!("Speed {}", speed_label(speed))));
     }
 
     /// Saves the settings `change` makes, applies them to speech in
@@ -732,16 +726,6 @@ fn hundredths(value: f32) -> f32 {
 /// rather than the nearest `f32`, 1.100000023841858.
 fn exact(speed: f32) -> f64 {
     (speed as f64 * 100.0).round() / 100.0
-}
-
-/// A speed as a listener reads it: `1.0×`, `1.2×`, `1.25×`.
-fn speed_label(speed: f32) -> String {
-    let hundredths = (speed * 100.0).round() as i64;
-    if hundredths % 10 == 0 {
-        format!("{:.1}×", speed)
-    } else {
-        format!("{:.2}×", speed)
-    }
 }
 
 fn to_json<T: Serialize>(value: &T) -> Result<Value, String> {

@@ -73,5 +73,5 @@ check() {
 check "notice: No text is selected" "the shortcut fired with nothing selected"
 check "speaking the selection" "the selection was read from the other app"
 check "first audio ready" "speech was synthesized and queued for playback"
-check "notice: Speed 1.1×" "the faster shortcut changed the speed while speaking"
+check "speed: 1.1" "the faster shortcut changed the speed while speaking"
 exit "$status"

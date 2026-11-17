@@ -31,7 +31,7 @@ function render() {
   renderSpeed();
 }
 
-/** 1.0×, 1.2×, 1.25×: as the engine's speed notices write it. */
+/** 1.0×, 1.2×, 1.25× */
 function speedText(speed) {
   const hundredths = Math.round(speed * 100);
   return (hundredths / 100).toFixed(hundredths % 10 === 0 ? 1 : 2) + "×";
@@ -46,8 +46,9 @@ function renderSpeed() {
   const normal = Math.round(settings.speed * 100) === 100;
   const target = normal ? settings.speed_before_reset : 1;
   button.textContent = speedText(settings.speed);
-  button.title = `Back to ${speedText(target)}`;
-  button.setAttribute("aria-label", `Speed ${speedText(settings.speed)}. ${button.title}`);
+  const back = target === settings.speed ? "" : `Back to ${speedText(target)}`;
+  button.title = back || "Speed";
+  button.setAttribute("aria-label", `Speed ${speedText(settings.speed)}. ${back}`.trim());
 }
 
 // --- The bars -------------------------------------------------------------
@@ -168,19 +169,25 @@ listen("speech", ({ payload: e }) => {
   animate();
 });
 
-listen("notice", ({ payload }) => {
-  view.notice = payload;
+// Puts `text` on the label for a moment.
+function flash(text) {
+  view.notice = text;
   clearTimeout(noticeTimer);
   noticeTimer = setTimeout(() => {
     view.notice = null;
     render();
   }, 2400);
   render();
-});
+}
+
+listen("notice", ({ payload }) => flash(payload));
 
 listen("settings", ({ payload }) => {
+  const changed = view.speed && view.speed.speed !== payload.speed;
   view.speed = { speed: payload.speed, speed_before_reset: payload.speed_before_reset };
-  renderSpeed();
+  // The readout has the number; the label says what changed.
+  if (changed) flash("Speed");
+  else renderSpeed();
 });
 
 const engine = (cmd) => invoke("engine", { command: { cmd } });

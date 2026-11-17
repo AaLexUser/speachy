@@ -111,15 +111,19 @@ pub fn run(app: &AppHandle, action: Action) {
         Action::Stop => {
             session.stop();
         }
-        // The engine announces the new speed itself.
-        Action::Faster => report(app, session.change_speed(0.1)),
-        Action::Slower => report(app, session.change_speed(-0.1)),
-        Action::ResetSpeed => report(app, session.reset_speed()),
+        Action::Faster => speed_changed(app, session.change_speed(0.1)),
+        Action::Slower => speed_changed(app, session.change_speed(-0.1)),
+        Action::ResetSpeed => speed_changed(app, session.reset_speed()),
     }
 }
 
-fn report<T>(app: &AppHandle, result: Result<T, String>) {
-    if let Err(message) = result {
-        speech::notice(app, &message);
+/// The pill shows the speed, so a change made by a shortcut brings it up.
+fn speed_changed(app: &AppHandle, result: Result<f32, String>) {
+    match result {
+        Ok(speed) => {
+            log::info!("speed: {speed}");
+            speech::show_pill_briefly(app);
+        }
+        Err(message) => speech::notice(app, &message),
     }
 }

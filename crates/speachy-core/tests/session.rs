@@ -310,12 +310,12 @@ const LONG: &str = "One sentence to read. Another one follows it. Then a third. 
     The eighth is here. Ninth of them. And the tenth ends it.";
 
 impl Rig {
-    /// Runs a speed command; returns the speed it answered and the
-    /// settings and notice it announced.
-    fn speed_command(&self, command: Value) -> (f64, Vec<Event>) {
-        let result = self.run(command).unwrap();
-        let events = self.events_until(|e| matches!(e, Event::Notice(_)));
-        (result["speed"].as_f64().unwrap(), events)
+    /// Runs a speed command and returns the speed it answered, once the
+    /// settings event with that speed has arrived.
+    fn speed_command(&self, command: Value) -> f64 {
+        let speed = self.run(command).unwrap()["speed"].as_f64().unwrap();
+        self.events_until(|e| matches!(e, Event::Settings(s) if s.speed == speed as f32));
+        speed
     }
 
     /// Speaks [`LONG`], runs `command` while it is heard, and returns the
@@ -332,41 +332,21 @@ impl Rig {
     }
 }
 
-fn announced(events: &[Event]) -> (Option<f32>, Option<String>) {
-    let settings = events.iter().rev().find_map(|e| match e {
-        Event::Settings(s) => Some(s.speed),
-        _ => None,
-    });
-    let notice = events.iter().rev().find_map(|e| match e {
-        Event::Notice(n) => Some(n.clone()),
-        _ => None,
-    });
-    (settings, notice)
-}
-
 #[test]
-fn change_speed_steps_rounds_clamps_and_announces() {
+fn change_speed_steps_rounds_and_clamps() {
     let rig = rig(&["supertonic-3"]);
-    let (speed, events) = rig.speed_command(json!({ "cmd": "change_speed", "by": 0.1 }));
-    assert_eq!(speed, 1.1);
-    assert_eq!(announced(&events), (Some(1.1), Some("Speed 1.1×".into())));
+    let speed = |command: Value| rig.speed_command(command);
+    assert_eq!(speed(json!({ "cmd": "change_speed", "by": 0.1 })), 1.1);
     assert_eq!(rig.session.settings().speed, 1.1);
-
-    let (speed, events) = rig.speed_command(json!({ "cmd": "change_speed", "by": 0.15 }));
-    assert_eq!(speed, 1.25);
-    assert_eq!(announced(&events).1.unwrap(), "Speed 1.25×");
+    assert_eq!(speed(json!({ "cmd": "change_speed", "by": 0.15 })), 1.25);
 
     rig.run(json!({ "cmd": "update_settings", "patch": { "speed": 2.5 } }))
         .unwrap();
-    let (speed, events) = rig.speed_command(json!({ "cmd": "change_speed", "by": 0.1 }));
-    assert_eq!(speed, 2.5);
-    assert_eq!(announced(&events).1.unwrap(), "Speed 2.5×");
+    assert_eq!(speed(json!({ "cmd": "change_speed", "by": 0.1 })), 2.5);
 
     rig.run(json!({ "cmd": "update_settings", "patch": { "speed": 0.5 } }))
         .unwrap();
-    let (speed, events) = rig.speed_command(json!({ "cmd": "change_speed", "by": -0.1 }));
-    assert_eq!(speed, 0.5);
-    assert_eq!(announced(&events).1.unwrap(), "Speed 0.5×");
+    assert_eq!(speed(json!({ "cmd": "change_speed", "by": -0.1 })), 0.5);
 
     // Saved: a session opened on the same directory has it.
     let reopened = Session::with_engines(
@@ -376,22 +356,6 @@ fn change_speed_steps_rounds_clamps_and_announces() {
         |_| {},
     );
     assert_eq!(reopened.settings().speed, 0.5);
-}
-
-#[test]
-fn a_speed_set_in_the_settings_announces_no_notice() {
-    let rig = rig(&["supertonic-3"]);
-    rig.run(json!({ "cmd": "update_settings", "patch": { "speed": 1.3 } }))
-        .unwrap();
-    rig.run(json!({ "cmd": "change_speed", "by": 0.1 }))
-        .unwrap();
-    let events = rig.events_until(|e| matches!(e, Event::Notice(_)));
-    let notices: Vec<_> = events
-        .iter()
-        .filter(|e| matches!(e, Event::Notice(_)))
-        .collect();
-    assert_eq!(notices.len(), 1, "{events:?}");
-    assert_eq!(announced(&events).1.unwrap(), "Speed 1.4×");
 }
 
 #[test]
@@ -408,19 +372,14 @@ fn reset_speed_goes_to_normal_and_back() {
     rig.run(json!({ "cmd": "update_settings", "patch": { "speed": 1.3 } }))
         .unwrap();
     for expected in [1.0, 1.3, 1.0] {
-        let (speed, events) = rig.speed_command(json!({ "cmd": "reset_speed" }));
-        assert_eq!(speed, expected);
-        let label = format!("Speed {expected:.1}×");
-        assert_eq!(announced(&events), (Some(expected as f32), Some(label)));
+        assert_eq!(rig.speed_command(json!({ "cmd": "reset_speed" })), expected);
     }
 }
 
 #[test]
 fn reset_speed_at_normal_speed_with_nothing_remembered_stays_normal() {
     let rig = rig(&["supertonic-3"]);
-    let (speed, events) = rig.speed_command(json!({ "cmd": "reset_speed" }));
-    assert_eq!(speed, 1.0);
-    assert_eq!(announced(&events), (Some(1.0), Some("Speed 1.0×".into())));
+    assert_eq!(rig.speed_command(json!({ "cmd": "reset_speed" })), 1.0);
 }
 
 #[test]
@@ -428,7 +387,7 @@ fn reset_speed_goes_back_to_the_speed_changed_to_after_a_reset() {
     let rig = rig(&["supertonic-3"]);
     rig.run(json!({ "cmd": "update_settings", "patch": { "speed": 1.3 } }))
         .unwrap();
-    let speed = |command: Value| rig.speed_command(command).0;
+    let speed = |command: Value| rig.speed_command(command);
     assert_eq!(speed(json!({ "cmd": "reset_speed" })), 1.0);
     assert_eq!(speed(json!({ "cmd": "change_speed", "by": 0.1 })), 1.1);
     assert_eq!(speed(json!({ "cmd": "reset_speed" })), 1.0);
