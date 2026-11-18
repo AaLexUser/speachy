@@ -143,19 +143,15 @@ impl Stretcher {
 
 /// Written with independent sums so the compiler can vectorize it.
 fn dot(a: &[f32], b: &[f32]) -> f32 {
+    let (a8, a_rest) = a.as_chunks::<8>();
+    let (b8, b_rest) = b.as_chunks::<8>();
     let mut sums = [0f32; 8];
-    let (a8, b8) = (a.chunks_exact(8), b.chunks_exact(8));
-    let rest: f32 = a8
-        .remainder()
-        .iter()
-        .zip(b8.remainder())
-        .map(|(x, y)| x * y)
-        .sum();
-    for (x, y) in a8.zip(b8) {
+    for (x, y) in a8.iter().zip(b8) {
         for i in 0..8 {
             sums[i] += x[i] * y[i];
         }
     }
+    let rest: f32 = a_rest.iter().zip(b_rest).map(|(x, y)| x * y).sum();
     sums.iter().sum::<f32>() + rest
 }
 
