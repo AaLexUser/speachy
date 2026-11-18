@@ -18,7 +18,8 @@ bottom of the screen shows what is being read.
   <kbd>⌃</kbd><kbd>⌥</kbd><kbd>X</kbd> stops.
 - **Change the speed while it reads.** <kbd>⌃</kbd><kbd>⌥</kbd><kbd>=</kbd>
   is faster, <kbd>⌃</kbd><kbd>⌥</kbd><kbd>-</kbd> slower, in steps of 0.1.
-  The sentence being read finishes and the next one has the new speed.
+  The new speed is heard at once, and no word is skipped: the voice keeps
+  its pitch.
   <kbd>⌃</kbd><kbd>⌥</kbd><kbd>0</kbd> goes back to normal speed, and pressed
   again, back to yours. The pill shows the speed; clicking it does the same.
   The speed is remembered. Every shortcut can be changed.
@@ -139,7 +140,9 @@ selection ──► clean up ──► chunks ──► language + voice per chu
    audio queue and play back to back. Silence at the edges of each chunk is
    trimmed and replaced by a deliberate pause that depends on the boundary
    (clause, sentence, paragraph), so the rhythm does not depend on where the
-   text happened to be cut.
+   text happened to be cut. The model always speaks at its natural pace;
+   speed is applied to the audio as it is played, by a time-stretch that
+   keeps the pitch (`stretch.rs`), so a change is heard within 15 ms.
 
 For English with Kokoro, words are converted to phonemes by
 [misaki-rs](https://github.com/MicheleYin/misaki-rs), the Rust port of the

@@ -1,8 +1,9 @@
 //! Audio output: a gapless queue of synthesized chunks.
 
 use crate::engine::Audio;
+use crate::stretch::Stretcher;
 use anyhow::Result;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::TryRecvError;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -32,66 +33,44 @@ pub trait AudioStream {
     /// Queues `audio` followed by `pause_after` of silence. Chunks play in
     /// the order pushed, back to back.
     fn push(&mut self, index: usize, audio: Audio, pause_after: Duration);
-    /// Drops every queued chunk that has not started playing; the one that
-    /// is playing plays to its end. Returns the index of the last chunk
-    /// that has started, if any has.
-    fn discard_pending(&mut self) -> Option<usize>;
+    /// Plays everything from the next block on `speed` times faster, at
+    /// the same pitch; the chunk that is playing changes speed too.
+    fn set_speed(&mut self, speed: f32);
     fn set_paused(&mut self, paused: bool);
     fn set_volume(&mut self, volume: f32);
 }
 
-/// Whether a queued chunk plays, decided once, by whichever comes first:
-/// its first sample being pulled, or [`AudioStream::discard_pending`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Fate {
-    Queued,
-    Started,
-    Discarded,
+/// A stream's speed, shared with the sound card's thread.
+#[derive(Clone)]
+struct Speed(Arc<AtomicU32>);
+
+impl Default for Speed {
+    fn default() -> Self {
+        Self(Arc::new(AtomicU32::new(1f32.to_bits())))
+    }
 }
 
-/// The chunks a stream has queued, as the stream sees them.
-#[derive(Default)]
-struct Queue {
-    chunks: Vec<(usize, Arc<Mutex<Fate>>)>,
-    last_started: Option<usize>,
-}
-
-impl Queue {
-    fn source(
-        &mut self,
-        index: usize,
-        audio: Audio,
-        pause_after: Duration,
-        on_event: &PlayCallback,
-    ) -> ChunkSource {
-        let fate = Arc::new(Mutex::new(Fate::Queued));
-        self.chunks.push((index, fate.clone()));
-        ChunkSource::new(index, audio, pause_after, fate, on_event.clone())
+impl Speed {
+    fn set(&self, speed: f32) {
+        self.0.store(speed.to_bits(), Ordering::Relaxed);
     }
 
-    fn discard_pending(&mut self) -> Option<usize> {
-        for (index, fate) in self.chunks.drain(..) {
-            let mut fate = fate.lock().unwrap();
-            match *fate {
-                Fate::Queued => *fate = Fate::Discarded,
-                Fate::Started => self.last_started = Some(index),
-                Fate::Discarded => {}
-            }
-        }
-        self.last_started
+    fn get(&self) -> f32 {
+        f32::from_bits(self.0.load(Ordering::Relaxed))
     }
 }
 
 /// A chunk as an audio source that reports when it starts and ends.
 struct ChunkSource {
     index: usize,
-    samples: std::vec::IntoIter<f32>,
-    silence_left: usize,
+    /// The chunk and the silence after it, both in natural time.
+    stretcher: Stretcher,
+    /// The block being played, and how much of it has been.
+    block: Vec<f32>,
+    played: usize,
     sample_rate: u32,
-    /// Shared with the stream's [`Queue`] until the fate is decided; after
-    /// that, `decided` holds it so no sample takes the lock.
-    fate: Arc<Mutex<Fate>>,
-    decided: Fate,
+    speed: Speed,
+    started: bool,
     finished: bool,
     /// Report `Finished` as soon as the last sample is pulled. The capture
     /// backend turns this off to record the chunk first.
@@ -104,17 +83,21 @@ impl ChunkSource {
         index: usize,
         audio: Audio,
         pause_after: Duration,
-        fate: Arc<Mutex<Fate>>,
+        speed: Speed,
         on_event: PlayCallback,
     ) -> Self {
-        let silence_left = (pause_after.as_secs_f64() * audio.sample_rate as f64) as usize;
+        let silence = (pause_after.as_secs_f64() * audio.sample_rate as f64) as usize;
+        let mut samples = audio.samples;
+        samples.resize(samples.len() + silence, 0.0);
+        let stretcher = Stretcher::new(samples, audio.sample_rate);
         Self {
             index,
+            block: Vec::with_capacity(stretcher.block_len()),
+            stretcher,
+            played: 0,
             sample_rate: audio.sample_rate,
-            samples: audio.samples.into_iter(),
-            silence_left,
-            fate,
-            decided: Fate::Queued,
+            speed,
+            started: false,
             finished: false,
             auto_finish: true,
             on_event,
@@ -122,7 +105,7 @@ impl ChunkSource {
     }
 
     fn finish(&mut self) {
-        if self.decided == Fate::Started && !self.finished {
+        if self.started && !self.finished {
             self.finished = true;
             (self.on_event)(PlayEvent::Finished(self.index));
         }
@@ -133,44 +116,27 @@ impl Iterator for ChunkSource {
     type Item = f32;
 
     fn next(&mut self) -> Option<f32> {
-        if self.decided == Fate::Queued {
-            self.decided = {
-                let mut fate = self.fate.lock().unwrap();
-                if *fate == Fate::Queued {
-                    *fate = Fate::Started;
+        if self.played == self.block.len() {
+            self.block.clear();
+            self.played = 0;
+            if !self.stretcher.next_block(self.speed.get(), &mut self.block) {
+                if self.auto_finish {
+                    self.finish();
                 }
-                *fate
-            };
-            if self.decided == Fate::Started {
+                return None;
+            }
+            if !self.started {
+                self.started = true;
                 (self.on_event)(PlayEvent::Started(self.index));
             }
         }
-        if self.decided == Fate::Discarded {
-            return None;
-        }
-        if let Some(sample) = self.samples.next() {
-            return Some(sample);
-        }
-        if self.silence_left > 0 {
-            self.silence_left -= 1;
-            return Some(0.0);
-        }
-        if self.auto_finish {
-            self.finish();
-        }
-        None
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let left = if self.decided == Fate::Discarded {
-            0
-        } else {
-            self.samples.len() + self.silence_left
-        };
-        (left, Some(left))
+        self.played += 1;
+        Some(self.block[self.played - 1])
     }
 }
 
+/// How long a chunk lasts depends on the speed while it plays, so no
+/// length is promised.
 impl rodio::Source for ChunkSource {
     fn current_span_len(&self) -> Option<usize> {
         None
@@ -197,7 +163,7 @@ struct SystemStream {
     player: rodio::Player,
     // Declared after `player` so the device outlives the queue feeding it.
     _device: rodio::MixerDeviceSink,
-    queue: Queue,
+    speed: Speed,
     on_event: PlayCallback,
 }
 
@@ -209,7 +175,7 @@ impl AudioBackend for SystemAudio {
         Ok(Box::new(SystemStream {
             player,
             _device: device,
-            queue: Queue::default(),
+            speed: Speed::default(),
             on_event,
         }))
     }
@@ -217,12 +183,18 @@ impl AudioBackend for SystemAudio {
 
 impl AudioStream for SystemStream {
     fn push(&mut self, index: usize, audio: Audio, pause_after: Duration) {
-        let source = self.queue.source(index, audio, pause_after, &self.on_event);
+        let source = ChunkSource::new(
+            index,
+            audio,
+            pause_after,
+            self.speed.clone(),
+            self.on_event.clone(),
+        );
         self.player.append(source);
     }
 
-    fn discard_pending(&mut self) -> Option<usize> {
-        self.queue.discard_pending()
+    fn set_speed(&mut self, speed: f32) {
+        self.speed.set(speed);
     }
 
     fn set_paused(&mut self, paused: bool) {
@@ -314,7 +286,7 @@ impl Pacer {
 
 struct CaptureStream {
     sender: std::sync::mpsc::Sender<ChunkSource>,
-    queue: Queue,
+    speed: Speed,
     paused: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     on_event: PlayCallback,
@@ -346,7 +318,7 @@ impl AudioBackend for CaptureAudio {
                     },
                 };
                 let sample_rate = source.sample_rate;
-                let mut samples = Vec::with_capacity(source.size_hint().0);
+                let mut samples = Vec::new();
                 // Consume in 10 ms blocks, like a device callback would.
                 let block = (sample_rate as usize / 100).max(1);
                 let mut was_paused = false;
@@ -387,7 +359,7 @@ impl AudioBackend for CaptureAudio {
         });
         Ok(Box::new(CaptureStream {
             sender: queue,
-            queue: Queue::default(),
+            speed: Speed::default(),
             paused,
             stop,
             on_event,
@@ -397,13 +369,19 @@ impl AudioBackend for CaptureAudio {
 
 impl AudioStream for CaptureStream {
     fn push(&mut self, index: usize, audio: Audio, pause_after: Duration) {
-        let mut source = self.queue.source(index, audio, pause_after, &self.on_event);
+        let mut source = ChunkSource::new(
+            index,
+            audio,
+            pause_after,
+            self.speed.clone(),
+            self.on_event.clone(),
+        );
         source.auto_finish = false;
         let _ = self.sender.send(source);
     }
 
-    fn discard_pending(&mut self) -> Option<usize> {
-        self.queue.discard_pending()
+    fn set_speed(&mut self, speed: f32) {
+        self.speed.set(speed);
     }
 
     fn set_paused(&mut self, paused: bool) {

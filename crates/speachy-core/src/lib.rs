@@ -7,6 +7,7 @@
 //! * [`plan`] — choosing a voice for every chunk
 //! * [`engine`] — synthesis (sherpa-onnx)
 //! * [`audio`] — gapless audio output
+//! * [`stretch`] — playing audio faster or slower at the same pitch
 //! * [`output`] — finding and opening the sound output device
 //! * [`pipeline`] — the synthesize-ahead speech pipeline
 //! * [`session`] — the front door: one object, driven by commands, that
@@ -26,5 +27,6 @@ pub mod russian;
 pub mod session;
 pub mod settings;
 pub mod stress;
+pub mod stretch;
 pub mod text;
 pub mod wav;

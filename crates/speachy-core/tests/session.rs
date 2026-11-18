@@ -11,25 +11,20 @@ use std::sync::mpsc::{channel, Receiver};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// Speaks every request as a tone, 10 ms per character at speed 1, and
-/// remembers what it was asked.
+/// Speaks every request as a tone, 10 ms per character, and remembers what
+/// it was asked.
 #[derive(Default)]
 struct FakeEngines {
-    requests: Mutex<Vec<(String, String, i32, f32)>>, // (text, lang, sid, speed)
+    requests: Mutex<Vec<(String, String, i32)>>, // (text, lang, sid)
     unloaded: Mutex<Vec<String>>,
 }
 
 impl Synthesizer for FakeEngines {
     fn synthesize(&self, req: &SynthRequest, _: &Arc<AtomicBool>) -> anyhow::Result<Option<Audio>> {
-        let request = (
-            req.text.to_string(),
-            req.lang.to_string(),
-            req.sid,
-            req.speed,
-        );
+        let request = (req.text.to_string(), req.lang.to_string(), req.sid);
         self.requests.lock().unwrap().push(request);
         Ok(Some(Audio {
-            samples: vec![0.1; (req.text.len() as f32 * 10.0 / req.speed) as usize],
+            samples: vec![0.1; req.text.len() * 10],
             sample_rate: 1000,
         }))
     }
@@ -54,6 +49,7 @@ impl EngineProvider for Provider {
 struct Rig {
     session: Session,
     engines: Arc<FakeEngines>,
+    audio: CaptureAudio,
     events: Receiver<Event>,
     _home: tempfile::TempDir,
 }
@@ -73,12 +69,13 @@ fn rig_playing_at(installed: &[&str], time_scale: f32) -> Rig {
         std::fs::write(dir.join(".speachy-model.json"), "{}").unwrap();
     }
     let engines = Arc::new(FakeEngines::default());
+    let audio = CaptureAudio::new(time_scale);
     let (tx, events) = channel();
     let tx = Mutex::new(tx);
     let session = Session::with_engines(
         paths,
         Arc::new(Provider(engines.clone())),
-        Arc::new(CaptureAudio::discarding(time_scale)),
+        Arc::new(audio.clone()),
         move |event| {
             let _ = tx.lock().unwrap().send(event.clone());
         },
@@ -86,6 +83,7 @@ fn rig_playing_at(installed: &[&str], time_scale: f32) -> Rig {
     Rig {
         session,
         engines,
+        audio,
         events,
         _home: home,
     }
@@ -318,17 +316,20 @@ impl Rig {
         speed
     }
 
-    /// Speaks [`LONG`], runs `command` while it is heard, and returns the
-    /// speeds the synthesizer was asked for, in order.
-    fn speeds_around(&self, command: Value) -> Vec<f32> {
+    /// Speaks [`LONG`] to the end, running `command` while it is heard if
+    /// there is one, and returns how many samples were heard.
+    fn heard_of_long(&self, command: Option<Value>) -> usize {
+        self.events.try_iter().for_each(drop);
+        self.audio.take();
         self.run(json!({ "cmd": "speak", "text": LONG })).unwrap();
-        self.events_until(|e| matches!(e, Event::Speech(SpeechEvent::ChunkPlaying { .. })));
-        self.run(json!({ "cmd": "pause" })).unwrap();
-        self.run(command).unwrap();
-        self.run(json!({ "cmd": "resume" })).unwrap();
+        if let Some(command) = command {
+            self.events_until(|e| matches!(e, Event::Speech(SpeechEvent::ChunkPlaying { .. })));
+            self.run(json!({ "cmd": "pause" })).unwrap();
+            self.run(command).unwrap();
+            self.run(json!({ "cmd": "resume" })).unwrap();
+        }
         self.run(json!({ "cmd": "wait" })).unwrap();
-        let requests = self.engines.requests.lock().unwrap();
-        requests.iter().map(|r| r.3).collect()
+        self.audio.take().samples.len()
     }
 }
 
@@ -360,10 +361,14 @@ fn change_speed_steps_rounds_and_clamps() {
 
 #[test]
 fn a_speed_set_in_the_settings_reaches_speech_in_progress() {
-    let rig = rig_playing_at(&["supertonic-3"], 1.0);
-    let speeds = rig.speeds_around(json!({ "cmd": "update_settings", "patch": { "speed": 1.5 } }));
-    assert_eq!(speeds.first(), Some(&1.0), "{speeds:?}");
-    assert_eq!(speeds.last(), Some(&1.5), "{speeds:?}");
+    let rig = rig_playing_at(&["supertonic-3"], 5.0);
+    let natural = rig.heard_of_long(None) as f32;
+    let heard = rig.heard_of_long(Some(
+        json!({ "cmd": "update_settings", "patch": { "speed": 1.5 } }),
+    )) as f32;
+    // Unchanged it would be all of it; changed from the start, two thirds.
+    assert!(heard < natural * 0.8, "{heard} of {natural} samples");
+    assert!(heard > natural / 1.5 * 0.95, "{heard} of {natural} samples");
 }
 
 #[test]
@@ -417,10 +422,12 @@ fn the_speed_and_the_speed_before_a_reset_are_remembered() {
 
 #[test]
 fn reset_speed_reaches_speech_in_progress() {
-    let rig = rig_playing_at(&["supertonic-3"], 1.0);
+    let rig = rig_playing_at(&["supertonic-3"], 5.0);
+    let natural = rig.heard_of_long(None) as f32;
     rig.run(json!({ "cmd": "update_settings", "patch": { "speed": 1.4 } }))
         .unwrap();
-    let speeds = rig.speeds_around(json!({ "cmd": "reset_speed" }));
-    assert_eq!(speeds.first(), Some(&1.4), "{speeds:?}");
-    assert_eq!(speeds.last(), Some(&1.0), "{speeds:?}");
+    let heard = rig.heard_of_long(Some(json!({ "cmd": "reset_speed" }))) as f32;
+    // Unreset it would be five sevenths of it.
+    assert!(heard > natural * 0.9, "{heard} of {natural} samples");
+    assert!(heard <= natural * 1.01, "{heard} of {natural} samples");
 }

@@ -31,8 +31,6 @@ pub struct SynthRequest<'a> {
     pub text: &'a str,
     /// Speaker id within the model.
     pub sid: i32,
-    /// 1.0 is the model's natural pace.
-    pub speed: f32,
     /// ISO 639-1 language of `text`.
     pub lang: &'a str,
 }
@@ -298,7 +296,6 @@ impl Synthesizer for SherpaEngine {
         }
         let mut config = GenerationConfig {
             sid: req.sid,
-            speed: req.speed.clamp(0.25, 4.0),
             extra: Some(extra),
             phoneme_codepoints: phonemes,
             ..Default::default()
