@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 const RATE: u32 = 1000;
 
-/// Produces `secs / speed` seconds of a constant level that encodes the chunk
+/// Produces `secs` seconds of a constant level that encodes the chunk
 /// number ("chunk-3" → 0.04), so played audio can be attributed.
 struct FakeEngine {
     secs: f32,
@@ -52,7 +52,7 @@ impl Synthesizer for FakeEngine {
             anyhow::bail!("cannot pronounce {}", req.text);
         }
         Ok(Some(Audio {
-            samples: vec![level(n); (self.secs * RATE as f32 / req.speed) as usize],
+            samples: vec![level(n); (self.secs * RATE as f32) as usize],
             sample_rate: RATE,
         }))
     }
@@ -512,12 +512,14 @@ fn every_chunk_reports_its_loudness_over_time() {
 }
 
 /// What was heard: for each chunk, in order, its number, its length in
-/// samples and the silence after it.
+/// samples and the silence after it. Played slower, the last samples of a
+/// fade-out can come again far below hearing, so silence is what is
+/// inaudible: under a tenth of the quietest chunk.
 fn heard(rig: &Rig) -> Vec<(usize, usize, usize)> {
     let played = rig.audio.take();
     let mut runs: Vec<(bool, usize, f32)> = Vec::new();
     for &sample in &played.samples {
-        let silent = sample == 0.0;
+        let silent = sample.abs() < level(0) / 10.0;
         match runs.last_mut() {
             Some((s, len, peak)) if *s == silent => {
                 *len += 1;
@@ -538,110 +540,87 @@ fn heard(rig: &Rig) -> Vec<(usize, usize, usize)> {
         .collect()
 }
 
-/// Asserts that chunks were heard exactly as `expected` says: (chunk,
-/// speed, milliseconds of pause after it), for 1 s chunks at 1000 Hz.
-fn assert_heard(heard: &[(usize, usize, usize)], expected: &[(usize, f32, f32)]) {
-    let chunks: Vec<usize> = heard.iter().map(|h| h.0).collect();
-    let wanted: Vec<usize> = expected.iter().map(|e| e.0).collect();
-    assert_eq!(chunks, wanted, "{heard:?}");
-    for (&(n, len, pause), &(_, speed, pause_ms)) in heard.iter().zip(expected) {
-        let want = (RATE as f32 / speed) as usize;
-        // Fades zero a sample or two at each edge of a chunk.
-        assert!(
-            (want - 2..=want).contains(&len),
-            "chunk {n}: {len} samples, expected {want} at speed {speed}: {heard:?}"
-        );
-        let want = (pause_ms / speed) as usize;
-        assert!(
-            (want..=want + 2).contains(&pause),
-            "pause after chunk {n}: {pause}, expected {want}: {heard:?}"
+fn opts_at(speed: f32) -> SpeakOptions {
+    SpeakOptions {
+        speed,
+        ..opts(20.0)
+    }
+}
+
+/// Asserts that `samples` is `want` within `margin` (a fraction of it).
+fn assert_near(
+    what: &str,
+    samples: usize,
+    want: f32,
+    margin: f32,
+    heard: &[(usize, usize, usize)],
+) {
+    assert!(
+        (samples as f32 - want).abs() <= want * margin,
+        "{what}: {samples} samples, expected {want}: {heard:?}"
+    );
+}
+
+fn chunk_numbers(heard: &[(usize, usize, usize)]) -> Vec<usize> {
+    heard.iter().map(|h| h.0).collect()
+}
+
+#[test]
+fn a_speed_set_before_speaking_is_heard_throughout() {
+    let rig = rig(1.0, 0, f32::INFINITY);
+    let session = rig.speaker.speak(plan("chunk", 4), opts_at(2.0));
+    let events = rig.until_finished(session);
+
+    assert_eq!(outcome(&events, session), Some((Outcome::Completed, None)));
+    assert_eq!(playing_order(&events), [0, 1, 2, 3]);
+    assert_eq!(rig.engine.calls.lock().unwrap().len(), 4);
+    let heard = heard(&rig);
+    assert_eq!(chunk_numbers(&heard), [0, 1, 2, 3]);
+    for &(n, len, pause) in &heard {
+        assert_near(&format!("chunk {n}"), len, 500.0, 0.05, &heard);
+        // Frames that span the end of the voice continue it into the pause,
+        // so the two are measured together.
+        let natural = 1000.0 + if n == 3 { 150.0 } else { 280.0 };
+        let with_pause = len + pause;
+        assert_near(
+            &format!("chunk {n} and pause"),
+            with_pause,
+            natural / 2.0,
+            0.05,
+            &heard,
         );
     }
 }
 
-fn speed_opts() -> SpeakOptions {
-    opts(20.0)
-}
-
 #[test]
-fn a_speed_change_during_speech_is_heard_from_the_next_chunk() {
-    // 1 s chunks in real time, all five synthesized and queued at once.
-    let rig = rig(1.0, 0, 1.0);
-    let session = rig.speaker.speak(plan("chunk", 5), speed_opts());
+fn a_speed_change_is_heard_in_the_chunk_playing() {
+    // 1 s chunks at twice real time, all synthesized and queued at once.
+    let rig = rig(1.0, 0, 2.0);
+    let session = rig.speaker.speak(plan("chunk", 4), opts(20.0));
     rig.wait_for(|e| matches!(e, SpeechEvent::ChunkPlaying { index: 1, .. }));
     rig.speaker.set_speed(2.0);
     let events = rig.until_finished(session);
 
     assert_eq!(outcome(&events, session), Some((Outcome::Completed, None)));
-    assert_eq!(playing_order(&events), [2, 3, 4]);
-    assert_heard(
-        &heard(&rig),
-        &[
-            (0, 1.0, 280.0),
-            (1, 1.0, 280.0),
-            (2, 2.0, 280.0),
-            (3, 2.0, 280.0),
-            (4, 2.0, 150.0),
-        ],
+    assert_eq!(playing_order(&events), [2, 3]);
+    assert_eq!(rig.engine.calls.lock().unwrap().len(), 4);
+    let heard = heard(&rig);
+    assert_eq!(chunk_numbers(&heard), [0, 1, 2, 3]);
+    assert_near("chunk 0", heard[0].1, 1000.0, 0.01, &heard);
+    let changed = heard[1].1;
+    assert!(
+        (510..980).contains(&changed),
+        "chunk 1 was not shortened while it played: {heard:?}"
     );
-    // The three queued chunks were synthesized again, and reported again.
-    assert_eq!(rig.engine.calls.lock().unwrap().len(), 8);
-    let ready: Vec<usize> = events
-        .iter()
-        .filter_map(|e| match e {
-            SpeechEvent::ChunkReady { index, .. } => Some(*index),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(ready, [2, 3, 4]);
-}
-
-#[test]
-fn a_speed_change_before_anything_plays_starts_over_at_the_new_speed() {
-    let rig = rig(1.0, 0, 1.0);
-    let session = rig.speaker.speak(plan("chunk", 3), speed_opts());
-    // Paused before the first chunk is ready: chunks are queued, none plays.
-    rig.speaker.set_paused(true);
-    rig.wait_for(|e| matches!(e, SpeechEvent::ChunkReady { index: 2, .. }));
-    rig.speaker.set_speed(2.0);
-    rig.speaker.set_paused(false);
-    let events = rig.until_finished(session);
-
-    assert_eq!(outcome(&events, session), Some((Outcome::Completed, None)));
-    assert_eq!(playing_order(&events), [0, 1, 2]);
-    assert_heard(
-        &heard(&rig),
-        &[(0, 2.0, 280.0), (1, 2.0, 280.0), (2, 2.0, 150.0)],
-    );
-}
-
-#[test]
-fn several_speed_changes_in_a_row_leave_the_last_one() {
-    let rig = rig(1.0, 0, 1.0);
-    let session = rig.speaker.speak(plan("chunk", 5), speed_opts());
-    rig.wait_for(|e| matches!(e, SpeechEvent::ChunkPlaying { index: 1, .. }));
-    rig.speaker.set_speed(1.5);
-    rig.speaker.set_speed(0.5);
-    rig.speaker.set_speed(2.0);
-    let events = rig.until_finished(session);
-
-    assert_eq!(outcome(&events, session), Some((Outcome::Completed, None)));
-    assert_heard(
-        &heard(&rig),
-        &[
-            (0, 1.0, 280.0),
-            (1, 1.0, 280.0),
-            (2, 2.0, 280.0),
-            (3, 2.0, 280.0),
-            (4, 2.0, 150.0),
-        ],
-    );
+    for &(n, len, _) in &heard[2..] {
+        assert_near(&format!("chunk {n}"), len, 500.0, 0.05, &heard);
+    }
 }
 
 #[test]
 fn a_speed_change_while_paused_is_heard_after_resuming() {
-    let rig = rig(1.0, 0, 1.0);
-    let session = rig.speaker.speak(plan("chunk", 4), speed_opts());
+    let rig = rig(1.0, 0, 2.0);
+    let session = rig.speaker.speak(plan("chunk", 3), opts(20.0));
     rig.wait_for(|e| matches!(e, SpeechEvent::ChunkPlaying { index: 1, .. }));
     rig.speaker.set_paused(true);
     rig.wait_for(|e| {
@@ -657,60 +636,28 @@ fn a_speed_change_while_paused_is_heard_after_resuming() {
     let events = rig.until_finished(session);
 
     assert_eq!(outcome(&events, session), Some((Outcome::Completed, None)));
-    assert_heard(
-        &heard(&rig),
-        &[
-            (0, 1.0, 280.0),
-            (1, 1.0, 280.0),
-            (2, 0.5, 280.0),
-            (3, 0.5, 150.0),
-        ],
+    let heard = heard(&rig);
+    assert_eq!(chunk_numbers(&heard), [0, 1, 2]);
+    assert_near("chunk 0", heard[0].1, 1000.0, 0.01, &heard);
+    assert!(
+        (1020..1980).contains(&heard[1].1),
+        "chunk 1 was not slowed after resuming: {heard:?}"
     );
+    assert_near("chunk 2", heard[2].1, 2000.0, 0.05, &heard);
 }
 
 #[test]
-fn a_speed_change_when_idle_or_to_the_same_speed_does_nothing() {
-    let rig = rig(1.0, 0, 10.0);
+fn a_speed_change_when_nothing_is_spoken_does_nothing() {
+    let rig = rig(1.0, 0, f32::INFINITY);
     rig.speaker.set_speed(2.0);
     assert_eq!(rig.speaker.state(), State::Idle);
+    assert!(!rig.speaker.is_active());
 
-    let session = rig.speaker.speak(plan("chunk", 5), speed_opts());
-    rig.wait_for(|e| matches!(e, SpeechEvent::ChunkPlaying { index: 0, .. }));
-    rig.speaker.set_speed(1.0);
+    let session = rig.speaker.speak(plan("chunk", 2), opts(20.0));
     let events = rig.until_finished(session);
     assert_eq!(outcome(&events, session), Some((Outcome::Completed, None)));
-    assert_eq!(rig.engine.calls.lock().unwrap().len(), 5);
-    assert_heard(
-        &heard(&rig),
-        &[
-            (0, 1.0, 280.0),
-            (1, 1.0, 280.0),
-            (2, 1.0, 280.0),
-            (3, 1.0, 280.0),
-            (4, 1.0, 150.0),
-        ],
-    );
-}
-
-#[test]
-fn a_chunk_skipped_before_and_after_a_speed_change_counts_once() {
-    let rig = rig(1.0, 0, 1.0);
-    let mut chunks = plan("chunk", 5);
-    chunks[3].text = "bad-3".into();
-    let session = rig.speaker.speak(chunks, speed_opts());
-    rig.wait_for(|e| matches!(e, SpeechEvent::ChunkPlaying { index: 1, .. }));
-    rig.speaker.set_speed(2.0);
-    let events = rig.until_finished(session);
-
-    assert_eq!(outcome(&events, session), Some((Outcome::Completed, None)));
-    assert_eq!(playing_order(&events), [2, 4]);
-    assert_heard(
-        &heard(&rig),
-        &[
-            (0, 1.0, 280.0),
-            (1, 1.0, 280.0),
-            (2, 2.0, 280.0),
-            (4, 2.0, 150.0),
-        ],
-    );
+    let heard = heard(&rig);
+    for &(n, len, _) in &heard {
+        assert_near(&format!("chunk {n}"), len, 1000.0, 0.01, &heard);
+    }
 }

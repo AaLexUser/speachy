@@ -71,10 +71,18 @@ impl Stretcher {
         }
     }
 
+    /// The most samples one block appends.
+    pub fn block_len(&self) -> usize {
+        self.hop
+    }
+
     /// Appends the next block of output to `out`, played at `speed`. Returns
     /// false when the samples are used up. `speed` may differ on every call.
     pub fn next_block(&mut self, speed: f32, out: &mut Vec<f32>) -> bool {
         let speed = playable(speed) as f64;
+        if self.ideal >= self.len as f64 {
+            return false;
+        }
         if speed == 1.0 {
             self.ideal = self.natural as f64;
         }
@@ -95,14 +103,22 @@ impl Stretcher {
             *tail = s * (1.0 - r);
         }
         self.natural = at + hop;
-        self.ideal += hop as f64 * speed;
+        // A short block plays the last of the input: nothing may follow it,
+        // even if a later block at normal speed would start further back.
+        self.ideal = if count < hop {
+            self.len as f64
+        } else {
+            self.ideal + hop as f64 * speed
+        };
         true
     }
 
     /// The start of the frame near the ideal position that is most like the
     /// natural continuation of the last frame, by normalized correlation:
     /// a loud candidate does not win for being loud. Ties go to the one
-    /// nearest the ideal position.
+    /// nearest the natural continuation: in silence every candidate ties,
+    /// and going back towards the ideal position would replay speech that
+    /// was already heard.
     fn best_frame(&self) -> usize {
         let frame = 2 * self.hop;
         let ideal = self.ideal.round() as usize;
@@ -113,7 +129,8 @@ impl Stretcher {
             let candidate = &self.samples[at..at + frame];
             dot(candidate, want) / (dot(candidate, candidate).sqrt() + 1e-6)
         };
-        let mut best = (ideal, score(ideal));
+        let nearest = self.natural.clamp(lo, hi);
+        let mut best = (nearest, score(nearest));
         for at in lo..=hi {
             let s = score(at);
             if s > best.1 {
@@ -282,6 +299,25 @@ mod tests {
             "{} samples, expected {want}",
             out.len()
         );
+    }
+
+    #[test]
+    fn voice_followed_by_silence_is_not_heard_again_after_it() {
+        // A steady voice that fades out, then a pause, as a chunk is played.
+        let mut input: Vec<f32> = (0..1000)
+            .map(|i| 0.02 * ((1000 - i) as f32 / 10.0).min(1.0))
+            .collect();
+        input.resize(1280, 0.0);
+        let audible = |s: &f32| s.abs() > 0.001;
+        for speed in [0.5, 0.6, 0.75, 1.5] {
+            let out = stretch(&input, 1000, |_| speed);
+            let last_voice = out.iter().rposition(audible).unwrap();
+            let first_silence = out.iter().position(|s| !audible(s)).unwrap();
+            assert!(
+                first_silence > last_voice,
+                "speed {speed}: voice at {last_voice}, after silence at {first_silence}"
+            );
+        }
     }
 
     #[test]
