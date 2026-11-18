@@ -53,7 +53,7 @@ commands, as `{"cmd": "<name>", …}`:
 | `cancel_install` | `id` | `{"cancelled": bool}` |
 | `remove_model` | `id` | `{}` |
 | `update_settings` | `patch` (only the fields to change) | `{"settings": …}` |
-| `change_speed` | `by` (for example `0.1` or `-0.1`) | `{"speed": 1.1}`; also while speaking, from the next chunk on |
+| `change_speed` | `by` (for example `0.1` or `-0.1`) | `{"speed": 1.1}`; also while speaking, heard at once |
 | `reset_speed` | | `{"speed": 1.0}`; at 1.0, back to the speed before the last reset |
 | `speak` | `text`, `voice` (`{model_id, voice_id}`), `lang` | `{"session": n}` |
 | `plan` | same as `speak` | `{"chunks": […]}`; nothing is synthesized |

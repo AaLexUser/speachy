@@ -113,7 +113,8 @@ function draw(now) {
   // A frame can be long after the window was hidden; do not leap.
   const elapsed = Math.min(100, now - wave.last);
   wave.last = now;
-  if (view.state === "speaking") wave.into += elapsed;
+  // Levels are for natural pace; the voice is heard `speed` times faster.
+  if (view.state === "speaking") wave.into += elapsed * (view.speed?.speed ?? 1);
   wave.trail.push([now, loudnessNow()]);
   const oldest = now - STEP * (MIDDLE + 2);
   while (wave.trail.length > 2 && wave.trail[1][0] < oldest) wave.trail.shift();
