@@ -3,11 +3,7 @@ Select text anywhere, press ⌃⌥S, and hear it read aloud by a text-to-speech 
 
 ## What's new
 
-- **Change the speed while it reads.** ⌃⌥= is faster and ⌃⌥- slower, in steps of 0.1. The sentence being read finishes, and the next one has the new speed. ⌃⌥0 goes back to normal speed; pressed again, it goes back to yours. The pill shows the speed, and clicking it does the same as ⌃⌥0. The speed is remembered, and the three shortcuts can be changed under Settings.
-- **Russian reads better with Supertonic 3.** Numbers, units and abbreviations are read as words: "3,5 млрд рублей", "−20 °C", "и т. д.". Each word gets its stress from a dictionary, and "ё" is put back where the text prints "е". Words that can be read two ways, such as "замок", are read as before.
-- **Accessibility access survives updates.** macOS remembers the permission for an app's signature, and until now every release had a signature of its own, so each update had to be allowed again. From this version on all releases share one. Updating to this version from an earlier one asks one last time: press **Open settings** in Speachy and switch it on.
-- **The pill moves with the voice.** Its bars now show how loud the speech is as you hear it, instead of a fixed animation, in a plainer style.
-- **Pocket TTS**, a new English model (104 MB) with eight voices that each sound like a particular person.
+- **Speed changes at once, and no words are lost.** In 0.1.4 a new speed was heard only from the next sentence, and at higher speeds the voice dropped words. Now the voice always speaks at its natural pace and the speed is applied as the audio plays, the way a video player does it: the change is heard immediately, in the middle of a sentence, and the pitch stays the same. The shortcuts are unchanged: ⌃⌥= faster, ⌃⌥- slower, ⌃⌥0 back to normal speed and, pressed again, back to yours.
 
 ## Downloads
 
