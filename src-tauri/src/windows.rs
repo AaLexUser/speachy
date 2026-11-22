@@ -1,6 +1,8 @@
-//! The settings window and the floating status pill.
+//! The settings window and the floating windows: the status pill and the
+//! captions above it.
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{
     AppHandle, Manager, PhysicalPosition, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
@@ -8,12 +10,15 @@ use tauri::{
 
 pub const MAIN: &str = "main";
 pub const OVERLAY: &str = "overlay";
+pub const CAPTIONS: &str = "captions";
 
 const OVERLAY_WIDTH: f64 = 380.0;
 const OVERLAY_HEIGHT: f64 = 56.0;
 /// Distance of the pill from the bottom of the screen's usable area (above
 /// the Dock or taskbar).
 const OVERLAY_MARGIN: f64 = 28.0;
+const CAPTIONS_WIDTH: f64 = 680.0;
+const CAPTIONS_HEIGHT: f64 = 60.0;
 
 pub fn create_main(app: &AppHandle, visible: bool) -> tauri::Result<WebviewWindow> {
     let builder = WebviewWindowBuilder::new(app, MAIN, WebviewUrl::App("index.html".into()))
@@ -67,52 +72,103 @@ tauri_nspanel::tauri_panel! {
     })
 }
 
-/// Creates the pill, hidden.
+/// Which floating windows are meant to be on screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Floating {
+    pub pill: bool,
+    pub captions: bool,
+}
+
+impl Floating {
+    fn any(self) -> bool {
+        self.pill || self.captions
+    }
+}
+
+/// A floating window to create.
+struct Spec {
+    label: &'static str,
+    page: &'static str,
+    width: f64,
+    height: f64,
+    /// Whether it takes clicks. One that does not lets every click through
+    /// to the app under it.
+    clickable: bool,
+}
+
+const PILL: Spec = Spec {
+    label: OVERLAY,
+    page: "overlay.html",
+    width: OVERLAY_WIDTH,
+    height: OVERLAY_HEIGHT,
+    clickable: true,
+};
+
+const CAPTIONS_WINDOW: Spec = Spec {
+    label: CAPTIONS,
+    page: "captions.html",
+    width: CAPTIONS_WIDTH,
+    height: CAPTIONS_HEIGHT,
+    clickable: false,
+};
+
+/// Creates the pill and the captions window, hidden. The captions window
+/// ignores the mouse.
+pub fn create_floating(app: &AppHandle) -> tauri::Result<()> {
+    for spec in [PILL, CAPTIONS_WINDOW] {
+        create(app, &spec)?;
+    }
+    Ok(())
+}
+
+/// Creates a floating window, hidden.
 ///
 /// On macOS it is a non-activating panel rather than a window: only a panel
 /// can sit on top of another app's full-screen space, appear on every
 /// space, and be shown without taking focus from the app being read in.
 #[cfg(target_os = "macos")]
-pub fn create_overlay(app: &AppHandle) -> tauri::Result<()> {
+fn create(app: &AppHandle, spec: &Spec) -> tauri::Result<()> {
     use tauri_nspanel::{CollectionBehavior, PanelBuilder, PanelLevel, StyleMask};
-    let panel = PanelBuilder::<_, OverlayPanel>::new(app, OVERLAY)
-        .url(WebviewUrl::App("overlay.html".into()))
+    let clickable = spec.clickable;
+    let panel = PanelBuilder::<_, OverlayPanel>::new(app, spec.label)
+        .url(WebviewUrl::App(spec.page.into()))
         .title("Speachy")
         .size(tauri::Size::Logical(tauri::LogicalSize::new(
-            OVERLAY_WIDTH,
-            OVERLAY_HEIGHT,
+            spec.width,
+            spec.height,
         )))
         .level(PanelLevel::Status)
         .has_shadow(false)
         .transparent(true)
         .no_activate(true)
         .corner_radius(0.0)
+        .ignores_mouse_events(!clickable)
         .style_mask(StyleMask::empty().borderless().nonactivating_panel())
         .collection_behavior(
             CollectionBehavior::new()
                 .can_join_all_spaces()
                 .full_screen_auxiliary(),
         )
-        .with_window(|window| {
+        .with_window(move |window| {
             window
                 .decorations(false)
                 .transparent(true)
                 .resizable(false)
                 .skip_taskbar(true)
                 .focusable(false)
-                .accept_first_mouse(true)
+                .accept_first_mouse(clickable)
         })
         .build()?;
     panel.hide();
     Ok(())
 }
 
-/// Creates the pill, hidden.
+/// Creates a floating window, hidden.
 #[cfg(not(target_os = "macos"))]
-pub fn create_overlay(app: &AppHandle) -> tauri::Result<()> {
-    WebviewWindowBuilder::new(app, OVERLAY, WebviewUrl::App("overlay.html".into()))
+fn create(app: &AppHandle, spec: &Spec) -> tauri::Result<()> {
+    WebviewWindowBuilder::new(app, spec.label, WebviewUrl::App(spec.page.into()))
         .title("Speachy")
-        .inner_size(OVERLAY_WIDTH, OVERLAY_HEIGHT)
+        .inner_size(spec.width, spec.height)
         .resizable(false)
         .decorations(false)
         .transparent(true)
@@ -123,20 +179,30 @@ pub fn create_overlay(app: &AppHandle) -> tauri::Result<()> {
         // Never take keyboard focus away from the app the user is reading in.
         .focused(false)
         .focusable(false)
-        .accept_first_mouse(true)
+        .accept_first_mouse(spec.clickable)
         .visible(false)
-        .build()?;
-    Ok(())
+        .build()?
+        .set_ignore_cursor_events(!spec.clickable)
 }
 
-/// Whether the pill is meant to be on screen.
-static OVERLAY_SHOWN: AtomicBool = AtomicBool::new(false);
-/// Whether the thread that keeps the pill on the user's screen is running.
+/// The floating windows meant to be on screen.
+static WANTED: Mutex<Floating> = Mutex::new(Floating {
+    pill: false,
+    captions: false,
+});
+/// Whether the thread that keeps the floating windows on the user's screen
+/// is running.
 static FOLLOWING: AtomicBool = AtomicBool::new(false);
 
-/// Where the pill belongs: bottom centre of the usable area of the screen
-/// the pointer is on, which is the screen the user is working on.
-fn overlay_position(app: &AppHandle) -> Option<PhysicalPosition<i32>> {
+fn wanted() -> Floating {
+    *WANTED.lock().unwrap()
+}
+
+/// Where the floating windows belong, on the screen the pointer is on,
+/// which is the screen the user is working on: the pill at the bottom
+/// centre of its usable area, the captions centred above the pill, or in
+/// the pill's place when the pill is off.
+fn positions(app: &AppHandle, want: Floating) -> Option<[PhysicalPosition<i32>; 2]> {
     let monitor = app
         .cursor_position()
         .ok()
@@ -144,51 +210,63 @@ fn overlay_position(app: &AppHandle) -> Option<PhysicalPosition<i32>> {
         .or_else(|| app.primary_monitor().ok().flatten())?;
     let scale = monitor.scale_factor();
     let area = monitor.work_area();
-    let width = OVERLAY_WIDTH * scale;
-    let height = (OVERLAY_HEIGHT + OVERLAY_MARGIN) * scale;
-    let x = f64::from(area.position.x) + (f64::from(area.size.width) - width) / 2.0;
-    let y = f64::from(area.position.y) + f64::from(area.size.height) - height;
-    Some(PhysicalPosition::new(x.round() as i32, y.round() as i32))
+    let left = |width: f64| {
+        f64::from(area.position.x) + (f64::from(area.size.width) - width * scale) / 2.0
+    };
+    let bottom = f64::from(area.position.y) + f64::from(area.size.height) - OVERLAY_MARGIN * scale;
+    let pill_top = bottom - OVERLAY_HEIGHT * scale;
+    let captions_bottom = if want.pill { pill_top } else { bottom };
+    let at = |x: f64, y: f64| PhysicalPosition::new(x.round() as i32, y.round() as i32);
+    Some([
+        at(left(OVERLAY_WIDTH), pill_top),
+        at(
+            left(CAPTIONS_WIDTH),
+            captions_bottom - CAPTIONS_HEIGHT * scale,
+        ),
+    ])
 }
 
-/// Moves the pill to where it belongs, if it is not already there.
-fn place_overlay(app: &AppHandle, window: &WebviewWindow) {
-    if let Some(target) = overlay_position(app) {
+/// Moves the floating windows that are meant to be up to where they belong.
+fn place(app: &AppHandle, want: Floating) {
+    let Some(targets) = positions(app, want) else {
+        return;
+    };
+    for ((label, shown), target) in [(OVERLAY, want.pill), (CAPTIONS, want.captions)]
+        .into_iter()
+        .zip(targets)
+    {
+        let Some(window) = app.get_webview_window(label).filter(|_| shown) else {
+            continue;
+        };
         if window.outer_position().ok() != Some(target) {
             let _ = window.set_position(target);
         }
     }
 }
 
-/// Shows the pill on the screen the user is working on, and keeps it there
-/// if they move to another screen while it is up.
-pub fn show_overlay(app: &AppHandle) {
-    let Some(window) = app.get_webview_window(OVERLAY) else {
-        return;
-    };
-    place_overlay(app, &window);
-    OVERLAY_SHOWN.store(true, Ordering::SeqCst);
-    let _ = window.show();
-    if FOLLOWING.swap(true, Ordering::SeqCst) {
+/// Shows, hides and places the floating windows to match `want`, and keeps
+/// them on the screen the pointer is on while either is up.
+pub fn set_floating(app: &AppHandle, want: Floating) {
+    *WANTED.lock().unwrap() = want;
+    place(app, want);
+    for (label, shown) in [(OVERLAY, want.pill), (CAPTIONS, want.captions)] {
+        if let Some(window) = app.get_webview_window(label) {
+            let _ = if shown { window.show() } else { window.hide() };
+        }
+    }
+    if !want.any() || FOLLOWING.swap(true, Ordering::SeqCst) {
         return;
     }
     let app = app.clone();
     std::thread::spawn(move || {
-        while OVERLAY_SHOWN.load(Ordering::SeqCst) {
+        while wanted().any() {
             std::thread::sleep(Duration::from_millis(400));
-            place_overlay(&app, &window);
+            place(&app, wanted());
         }
         FOLLOWING.store(false, Ordering::SeqCst);
-        // Shown again between the check and the flag: keep following.
-        if OVERLAY_SHOWN.load(Ordering::SeqCst) {
-            show_overlay(&app);
+        // Wanted again between the check and the flag: keep following.
+        if wanted().any() {
+            set_floating(&app, wanted());
         }
     });
-}
-
-pub fn hide_overlay(app: &AppHandle) {
-    OVERLAY_SHOWN.store(false, Ordering::SeqCst);
-    if let Some(window) = app.get_webview_window(OVERLAY) {
-        let _ = window.hide();
-    }
 }
