@@ -560,7 +560,7 @@ fn run_session(
                 );
                 waiting.insert(index, raw_secs);
                 let pause = pause_after(&plan[index]);
-                stream.push(index, audio, pause);
+                stream.push(index, audio, Vec::new(), pause);
             }
             Msg::Play(PlayEvent::Started(index)) => {
                 playing = true;
@@ -577,6 +577,7 @@ fn run_session(
                     gate.add(-secs);
                 }
             }
+            Msg::Play(PlayEvent::Mark(..)) => {}
             Msg::Play(PlayEvent::Finished(_)) => {
                 done += 1;
                 // Playback ran dry before the next chunk was ready.
