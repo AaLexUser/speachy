@@ -3,7 +3,7 @@
 
 use serde_json::{json, Value};
 use speachy_core::audio::CaptureAudio;
-use speachy_core::engine::{Audio, EngineKey, EngineProvider, SynthRequest, Synthesizer};
+use speachy_core::engine::{Audio, EngineKey, EngineProvider, Speech, SynthRequest, Synthesizer};
 use speachy_core::pipeline::{Outcome, SpeechEvent};
 use speachy_core::session::{Command, Event, Paths, Session};
 use std::sync::atomic::AtomicBool;
@@ -20,12 +20,19 @@ struct FakeEngines {
 }
 
 impl Synthesizer for FakeEngines {
-    fn synthesize(&self, req: &SynthRequest, _: &Arc<AtomicBool>) -> anyhow::Result<Option<Audio>> {
+    fn synthesize(
+        &self,
+        req: &SynthRequest,
+        _: &Arc<AtomicBool>,
+    ) -> anyhow::Result<Option<Speech>> {
         let request = (req.text.to_string(), req.lang.to_string(), req.sid);
         self.requests.lock().unwrap().push(request);
-        Ok(Some(Audio {
-            samples: vec![0.1; req.text.len() * 10],
-            sample_rate: 1000,
+        Ok(Some(Speech {
+            audio: Audio {
+                samples: vec![0.1; req.text.len() * 10],
+                sample_rate: 1000,
+            },
+            spoken: None,
         }))
     }
 }

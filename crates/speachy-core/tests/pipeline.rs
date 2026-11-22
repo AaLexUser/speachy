@@ -2,7 +2,7 @@
 //! sound card.
 
 use speachy_core::audio::CaptureAudio;
-use speachy_core::engine::{Audio, EngineKey, EngineProvider, SynthRequest, Synthesizer};
+use speachy_core::engine::{Audio, EngineKey, EngineProvider, Speech, SynthRequest, Synthesizer};
 use speachy_core::pipeline::{
     loudness_over_time, Outcome, SpeakOptions, Speaker, SpeechEvent, State, LEVEL_WINDOW,
 };
@@ -37,7 +37,7 @@ impl Synthesizer for FakeEngine {
         &self,
         req: &SynthRequest,
         cancel: &Arc<AtomicBool>,
-    ) -> anyhow::Result<Option<Audio>> {
+    ) -> anyhow::Result<Option<Speech>> {
         let n: usize = req.text.rsplit('-').next().unwrap().parse().unwrap_or(0);
         self.calls
             .lock()
@@ -51,9 +51,12 @@ impl Synthesizer for FakeEngine {
         if req.text.starts_with("bad") {
             anyhow::bail!("cannot pronounce {}", req.text);
         }
-        Ok(Some(Audio {
-            samples: vec![level(n); (self.secs * RATE as f32) as usize],
-            sample_rate: RATE,
+        Ok(Some(Speech {
+            audio: Audio {
+                samples: vec![level(n); (self.secs * RATE as f32) as usize],
+                sample_rate: RATE,
+            },
+            spoken: None,
         }))
     }
 }

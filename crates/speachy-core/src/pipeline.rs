@@ -17,7 +17,7 @@
 //! in the middle of a chunk, and nothing synthesized is thrown away.
 
 use crate::audio::{AudioBackend, AudioStream, PlayEvent};
-use crate::engine::{Audio, EngineProvider, SynthRequest};
+use crate::engine::{Audio, EngineProvider, Speech, SynthRequest};
 use crate::plan::PlannedChunk;
 use crate::text::Boundary;
 use serde::Serialize;
@@ -112,7 +112,7 @@ enum Msg {
     Loading,
     Synth {
         index: usize,
-        result: anyhow::Result<Option<Audio>>,
+        result: anyhow::Result<Option<Speech>>,
         synth_secs: f32,
     },
     Play(PlayEvent),
@@ -418,8 +418,8 @@ fn synthesis_worker(
         }
         // Count the audio as waiting before the session thread sees it, so
         // the next iteration cannot slip past the gate.
-        if let Ok(Some(audio)) = &result {
-            gate.add(audio.seconds());
+        if let Ok(Some(speech)) = &result {
+            gate.add(speech.audio.seconds());
         }
         let msg = Msg::Synth {
             index,
@@ -520,11 +520,11 @@ fn run_session(
                 synth_secs,
             } => {
                 let raw_secs = match &result {
-                    Ok(Some(audio)) => audio.seconds(),
+                    Ok(Some(speech)) => speech.audio.seconds(),
                     _ => 0.0,
                 };
                 let audio = match result {
-                    Ok(Some(audio)) => trim_silence(audio),
+                    Ok(Some(speech)) => trim_silence(speech.audio),
                     Ok(None) => continue,
                     Err(err) => {
                         log::warn!("chunk {index} failed: {err:#}");
