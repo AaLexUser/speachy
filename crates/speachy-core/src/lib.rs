@@ -8,12 +8,14 @@
 //! * [`engine`] — synthesis (sherpa-onnx)
 //! * [`audio`] — gapless audio output
 //! * [`stretch`] — playing audio faster or slower at the same pitch
+//! * [`captions`] — the words of a chunk, when each is heard, and their lines
 //! * [`output`] — finding and opening the sound output device
 //! * [`pipeline`] — the synthesize-ahead speech pipeline
 //! * [`session`] — the front door: one object, driven by commands, that
 //!   every front end (app, CLI, JSON channel) uses
 
 pub mod audio;
+pub mod captions;
 pub mod catalog;
 pub mod engine;
 pub mod english;
