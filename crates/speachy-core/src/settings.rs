@@ -65,6 +65,9 @@ pub struct Settings {
     pub preload_model: bool,
     /// Show the floating status pill while speaking.
     pub show_overlay: bool,
+    /// Show the words being read above the pill, with the current one
+    /// highlighted.
+    pub captions: bool,
     pub launch_at_login: bool,
     /// Keep the settings window closed at launch (menu bar only).
     pub start_hidden: bool,
@@ -87,6 +90,7 @@ impl Default for Settings {
             threads: 0,
             preload_model: true,
             show_overlay: true,
+            captions: false,
             launch_at_login: false,
             start_hidden: false,
             check_for_updates: true,

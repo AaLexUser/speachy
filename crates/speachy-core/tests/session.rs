@@ -470,3 +470,17 @@ fn reset_speed_reaches_speech_in_progress() {
     assert!(heard > natural * 0.9, "{heard} of {natural} samples");
     assert!(heard <= natural * 1.01, "{heard} of {natural} samples");
 }
+
+#[test]
+fn captions_are_off_by_default_and_can_be_turned_on() {
+    let rig = rig(&["supertonic-3"]);
+    let snapshot = rig.run(json!({ "cmd": "snapshot" })).unwrap();
+    assert_eq!(snapshot["settings"]["captions"], false);
+    let result = rig
+        .run(json!({ "cmd": "update_settings", "patch": { "captions": true } }))
+        .unwrap();
+    assert_eq!(result["settings"]["captions"], true);
+    rig.events_until(|e| matches!(e, Event::Settings(s) if s.captions));
+    let snapshot = rig.run(json!({ "cmd": "snapshot" })).unwrap();
+    assert_eq!(snapshot["settings"]["captions"], true);
+}

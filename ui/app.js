@@ -386,6 +386,7 @@ function pageSettings() {
       ${toggleRow("launch_at_login", "Launch at login", "Start Speachy in the menu bar when you log in.")}
       ${toggleRow("start_hidden", "Start in the menu bar", "Do not open this window when Speachy starts.")}
       ${toggleRow("show_overlay", "Show the floating pill", "A small control at the bottom of the screen while speaking.")}
+      ${toggleRow("captions", "Show captions", "The words being read, above the pill, with the current word highlighted.")}
       ${toggleRow("preload_model", "Keep the voice ready", "Load the default voice at launch so the first request starts sooner. Uses more memory.")}
     </section>
     <section class="card">
