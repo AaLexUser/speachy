@@ -83,21 +83,19 @@ sleep 2.5
 shot 3-captions-and-pill-speaking
 
 # A click on the caption goes to TextEdit under it: the selection gives way
-# to the insertion point, and a typed letter is added rather than replacing
-# the selected text.
+# to the insertion point, so a typed letter is added to the text instead of
+# replacing all of it. The next reading says which happened: it is two
+# characters longer (a line break and the letter), not one character long.
+# TextEdit itself is not asked: that needs a permission macOS asks for in a
+# dialog.
 point=$(caption_point || true)
-clicked=no
 if [ -n "$point" ]; then
     # shellcheck disable=SC2086
     click $point
     sleep 0.3
     osascript -e 'tell application "System Events" to keystroke "Z"'
     sleep 0.3
-    text=$(osascript -e 'tell application "TextEdit" to get text of document 1' || true)
-    case $text in
-        *Speachy*Z*) clicked=yes ;;
-    esac
-    echo "caption at $point; TextEdit now holds: $text"
+    echo "clicked the caption at $point and typed a letter"
 else
     echo "no captions window on screen"
 fi
@@ -142,10 +140,12 @@ check "notice: No text is selected" "the shortcut fired with nothing selected"
 check "speaking the selection" "the selection was read from the other app"
 check "first audio ready" "speech was synthesized and queued for playback"
 check "speed: 1.1" "the faster shortcut changed the speed while speaking"
-if [ "$clicked" = yes ]; then
+# How many characters each reading had, in order.
+set -- $(sed -n 's/.*speaking the selection (\([0-9]*\) characters).*/\1/p' "$log")
+if [ -n "$point" ] && [ $# -ge 2 ] && [ "$2" -eq $(($1 + 2)) ]; then
     echo "ok: a click on the caption reached the app under it"
 else
-    echo "error: a click on the caption did not reach the app under it" >&2
+    echo "error: a click on the caption did not reach the app under it (readings of ${1:-no} and ${2:-no} characters)" >&2
     status=1
 fi
 exit "$status"
