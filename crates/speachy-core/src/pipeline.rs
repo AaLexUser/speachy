@@ -17,6 +17,7 @@
 //! in the middle of a chunk, and nothing synthesized is thrown away.
 
 use crate::audio::{AudioBackend, AudioStream, PlayEvent};
+use crate::captions::{self, Word};
 use crate::engine::{Audio, EngineProvider, Speech, SynthRequest};
 use crate::plan::PlannedChunk;
 use crate::text::Boundary;
@@ -88,11 +89,19 @@ pub enum SpeechEvent {
         /// How loud the chunk is over its length at natural pace, for
         /// drawing it: see [`loudness_over_time`].
         levels: Vec<u8>,
+        /// The chunk's words, for captions: see [`crate::captions`].
+        words: Vec<Word>,
     },
     /// Chunk `index` started playing.
     ChunkPlaying {
         session: u64,
         index: usize,
+    },
+    /// Word `word` of chunk `index` started playing.
+    WordPlaying {
+        session: u64,
+        index: usize,
+        word: usize,
     },
     Finished {
         session: u64,
@@ -523,16 +532,17 @@ fn run_session(
                     Ok(Some(speech)) => speech.audio.seconds(),
                     _ => 0.0,
                 };
-                let audio = match result {
-                    Ok(Some(speech)) => trim_silence(speech.audio),
+                let (audio, spoken) = match result {
+                    Ok(Some(speech)) => (trim_silence(speech.audio), speech.spoken),
                     Ok(None) => continue,
                     Err(err) => {
                         log::warn!("chunk {index} failed: {err:#}");
                         failure.get_or_insert(format!("{err:#}"));
-                        Audio {
+                        let audio = Audio {
                             samples: Vec::new(),
                             sample_rate: 1,
-                        }
+                        };
+                        (audio, None)
                     }
                 };
                 if audio.samples.is_empty() {
@@ -548,6 +558,17 @@ fn run_session(
                         started.elapsed().as_secs_f32() * 1000.0
                     );
                 }
+                let levels = loudness_over_time(&audio);
+                let chunk = &plan[index];
+                let words = captions::words(
+                    &chunk.text,
+                    spoken.as_deref().unwrap_or(&chunk.text),
+                    &levels,
+                );
+                let marks = words
+                    .iter()
+                    .map(|w| (w.start_secs * audio.sample_rate as f32) as usize)
+                    .collect();
                 inner.emit(
                     id,
                     SpeechEvent::ChunkReady {
@@ -555,12 +576,12 @@ fn run_session(
                         index,
                         audio_secs: audio.seconds(),
                         synth_secs,
-                        levels: loudness_over_time(&audio),
+                        levels,
+                        words,
                     },
                 );
                 waiting.insert(index, raw_secs);
-                let pause = pause_after(&plan[index]);
-                stream.push(index, audio, Vec::new(), pause);
+                stream.push(index, audio, marks, pause_after(chunk));
             }
             Msg::Play(PlayEvent::Started(index)) => {
                 playing = true;
@@ -577,7 +598,14 @@ fn run_session(
                     gate.add(-secs);
                 }
             }
-            Msg::Play(PlayEvent::Mark(..)) => {}
+            Msg::Play(PlayEvent::Mark(index, word)) => inner.emit(
+                id,
+                SpeechEvent::WordPlaying {
+                    session: id,
+                    index,
+                    word,
+                },
+            ),
             Msg::Play(PlayEvent::Finished(_)) => {
                 done += 1;
                 // Playback ran dry before the next chunk was ready.

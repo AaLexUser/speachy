@@ -194,6 +194,8 @@ fn describe(event: &Event) -> Option<String> {
             format!("chunk {index} ready: {audio_secs:.2} s of audio in {synth_secs:.2} s")
         }
         Event::Speech(SpeechEvent::ChunkPlaying { index, .. }) => format!("chunk {index} playing"),
+        // A line per word is noise for a person; `--json` has them.
+        Event::Speech(SpeechEvent::WordPlaying { .. }) => return None,
         Event::Speech(SpeechEvent::Finished {
             outcome, message, ..
         }) => {

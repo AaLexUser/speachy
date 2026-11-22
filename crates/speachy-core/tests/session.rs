@@ -3,6 +3,7 @@
 
 use serde_json::{json, Value};
 use speachy_core::audio::CaptureAudio;
+use speachy_core::captions::Word;
 use speachy_core::engine::{Audio, EngineKey, EngineProvider, Speech, SynthRequest, Synthesizer};
 use speachy_core::pipeline::{Outcome, SpeechEvent};
 use speachy_core::session::{Command, Event, Paths, Session};
@@ -307,6 +308,37 @@ fn commands_and_events_have_a_stable_json_shape() {
     assert_eq!(
         event,
         json!({ "event": "speech", "data": { "type": "chunk_playing", "session": 3, "index": 1 } })
+    );
+    let event = serde_json::to_value(Event::Speech(SpeechEvent::WordPlaying {
+        session: 3,
+        index: 1,
+        word: 4,
+    }))
+    .unwrap();
+    assert_eq!(
+        event,
+        json!({ "event": "speech", "data": { "type": "word_playing", "session": 3, "index": 1, "word": 4 } })
+    );
+    let event = serde_json::to_value(Event::Speech(SpeechEvent::ChunkReady {
+        session: 3,
+        index: 1,
+        audio_secs: 0.5,
+        synth_secs: 0.25,
+        levels: vec![40, 0],
+        words: vec![Word {
+            text: "3,5 млрд".into(),
+            start_secs: 0.25,
+            line: 0,
+        }],
+    }))
+    .unwrap();
+    assert_eq!(
+        event,
+        json!({ "event": "speech", "data": {
+            "type": "chunk_ready", "session": 3, "index": 1, "audio_secs": 0.5, "synth_secs": 0.25,
+            "levels": [40, 0],
+            "words": [{ "text": "3,5 млрд", "start_secs": 0.25, "line": 0 }],
+        } })
     );
 }
 

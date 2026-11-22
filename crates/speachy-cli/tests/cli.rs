@@ -1,5 +1,7 @@
 //! Runs the built `speachy-cli` binary the way a script or an agent would.
-//! No model is installed in these tests, so nothing is synthesized.
+//! No model is installed in these tests, so nothing is synthesized, except
+//! by the tests that `SPEACHY_TEST_MODELS` turns on: set it to a models
+//! directory with `supertonic-3` installed.
 
 use serde_json::Value;
 use std::io::Write;
@@ -213,4 +215,69 @@ fn serve_answers_each_line_and_echoes_ids() {
     assert!(lines
         .iter()
         .any(|l| l["event"] == "settings" && l["data"]["speed"] == 2.0));
+}
+
+/// A scratch home that uses the models in `SPEACHY_TEST_MODELS`, if set.
+#[cfg(unix)]
+fn home_with_models() -> Option<tempfile::TempDir> {
+    let models = std::env::var_os("SPEACHY_TEST_MODELS")?;
+    let home = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(models, home.path().join("models")).unwrap();
+    Some(home)
+}
+
+#[cfg(unix)]
+#[test]
+fn speaking_reports_every_word_as_it_is_read() {
+    let Some(home) = home_with_models() else {
+        eprintln!("SPEACHY_TEST_MODELS is not set: nothing to synthesize with");
+        return;
+    };
+    let text = "Выручка выросла на 15% и достигла 3,5 млрд рублей.";
+    let args = [
+        "speak",
+        "--json",
+        "--no-audio",
+        "--voice",
+        "supertonic-3/F1",
+        "--lang",
+        "ru",
+        text,
+    ];
+    let output = cli(home.path(), &args, None);
+    assert!(output.status.success(), "{}", stdout(&output));
+    let lines: Vec<Value> = stdout(&output)
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    let words: Vec<String> = lines
+        .iter()
+        .filter(|l| l["data"]["type"] == "chunk_ready")
+        .flat_map(|l| l["data"]["words"].as_array().unwrap().clone())
+        .map(|w| w["text"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        words,
+        [
+            "Выручка",
+            "выросла",
+            "на",
+            "15%",
+            "и",
+            "достигла",
+            "3,5 млрд",
+            "рублей."
+        ]
+    );
+    let played: Vec<(u64, u64)> = lines
+        .iter()
+        .filter(|l| l["data"]["type"] == "word_playing")
+        .map(|l| {
+            (
+                l["data"]["index"].as_u64().unwrap(),
+                l["data"]["word"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(played, (0..8).map(|w| (0, w)).collect::<Vec<_>>());
 }
