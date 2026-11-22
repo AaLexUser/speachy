@@ -132,38 +132,6 @@ fn without_kitten_tail(samples: &[f32], sample_rate: u32) -> &[f32] {
     &samples[..samples.len().saturating_sub(tail)]
 }
 
-/// Shortens every pause longer than 0.2 s to `scale` (at most 1) of its
-/// length, as sherpa-onnx's `GeneratedAudio::ScaleSilence` does to the
-/// audio it returns.
-fn shorten_pauses(samples: &[f32], sample_rate: u32, scale: f32) -> Vec<f32> {
-    let min_pause = (f64::from(sample_rate) * 0.2) as usize;
-    let mut pauses = Vec::new();
-    let mut quiet_from = None;
-    for (i, sample) in samples.iter().enumerate() {
-        if sample.abs() <= 0.01 {
-            quiet_from.get_or_insert(i);
-        } else if let Some(start) = quiet_from.take() {
-            if i - start >= min_pause {
-                pauses.push(start..i);
-            }
-        }
-    }
-    if let Some(start) = quiet_from {
-        if samples.len() - start > min_pause {
-            pauses.push(start..samples.len());
-        }
-    }
-    let mut out = Vec::with_capacity(samples.len());
-    let mut copied = 0;
-    for pause in pauses {
-        let keep = (pause.len() as f32 * scale) as usize;
-        out.extend_from_slice(&samples[copied..pause.start + keep]);
-        copied = pause.end;
-    }
-    out.extend_from_slice(&samples[copied..]);
-    out
-}
-
 fn existing(dir: &Path, names: &[&str]) -> Result<String> {
     names
         .iter()
@@ -343,10 +311,9 @@ impl Synthesizer for SherpaEngine {
             phoneme_codepoints: phonemes,
             ..Default::default()
         };
-        let pause_scale = config.silence_scale;
         if self.family == Family::Kitten {
-            // The tail is measured in the model's own output, so pauses are
-            // shortened after it is dropped, not by sherpa-onnx before.
+            // The tail is measured in the model's own output: sherpa-onnx
+            // must not shorten pauses in it first.
             config.silence_scale = 1.0;
         }
         if self.family == Family::Pocket {
@@ -372,8 +339,8 @@ impl Synthesizer for SherpaEngine {
         match self.family {
             Family::Pocket => level(&mut samples),
             Family::Kitten => {
-                let speech = without_kitten_tail(&samples, sample_rate);
-                samples = shorten_pauses(speech, sample_rate, pause_scale);
+                let speech = without_kitten_tail(&samples, sample_rate).len();
+                samples.truncate(speech);
             }
             Family::Supertonic | Family::Kokoro => {}
         }
@@ -479,7 +446,7 @@ impl EngineProvider for EngineCache {
 
 #[cfg(test)]
 mod tests {
-    use super::{level, shorten_pauses, without_kitten_tail};
+    use super::{level, without_kitten_tail};
 
     fn loudness(samples: &[f32]) -> f32 {
         (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
@@ -528,33 +495,6 @@ mod tests {
         assert!(without_kitten_tail(&audio[..5_000], 24_000).is_empty());
         assert!(without_kitten_tail(&audio[..100], 24_000).is_empty());
         assert!(without_kitten_tail(&[], 24_000).is_empty());
-    }
-
-    #[test]
-    fn pauses_longer_than_a_fifth_of_a_second_are_shortened() {
-        let speech = || vec![0.5; 2_400];
-        let pause = |ms: usize| vec![0.0; 24 * ms];
-        let audio = [
-            speech(),
-            pause(300),
-            speech(),
-            pause(100),
-            speech(),
-            pause(500),
-        ]
-        .concat();
-        let expected = [
-            speech(),
-            pause(60),
-            speech(),
-            pause(100),
-            speech(),
-            pause(100),
-        ]
-        .concat();
-        assert_eq!(shorten_pauses(&audio, 24_000, 0.2), expected);
-        assert_eq!(shorten_pauses(&audio, 24_000, 1.0), audio);
-        assert!(shorten_pauses(&[], 24_000, 0.2).is_empty());
     }
 
     #[test]
