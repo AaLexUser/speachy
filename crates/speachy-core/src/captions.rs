@@ -362,6 +362,12 @@ fn spoken_starts(spoken: &[Piece], levels: &[u8]) -> Vec<f64> {
         expected[b + 1] = piece.pause;
     }
 
+    // Speech ends at the last sounding window: quiet after it is not speech.
+    let speech = levels
+        .iter()
+        .rposition(|l| *l >= QUIET)
+        .map_or(0, |last| last + 1);
+    let levels = &levels[..speech];
     let mut gaps = pauses(levels);
     if gaps.len() > n - 1 {
         // More pauses than boundaries: the longest are the real ones.
@@ -566,6 +572,15 @@ mod tests {
         );
         assert!(near(words[3].start_secs, secs(50)), "{words:?}");
         assert_eq!(words[0].start_secs, 0.0);
+    }
+
+    #[test]
+    fn quiet_after_the_last_sound_is_not_speech() {
+        let text = "Он долго молчал, потом сказал.";
+        let levels = speech(&[40, 30], &[10]);
+        let mut tail = levels.clone();
+        tail.extend([3; 10]);
+        assert_eq!(words(text, text, &levels), words(text, text, &tail));
     }
 
     #[test]
