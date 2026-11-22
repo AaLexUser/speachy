@@ -121,6 +121,49 @@ fn level(samples: &mut [f32]) {
     }
 }
 
+/// KittenTTS ends every output with noise, often a murmur, and a click. Its
+/// own code drops them (`audio = outputs[0][..., :-5000]`, 5000 samples at
+/// 24 kHz, in KittenML/KittenTTS `kittenml/kittentts_legacy/onnx_model.py`
+/// line 159); sherpa-onnx returns them.
+const KITTEN_TAIL_SECONDS: f64 = 5000.0 / 24000.0;
+
+fn without_kitten_tail(samples: &[f32], sample_rate: u32) -> &[f32] {
+    let tail = (KITTEN_TAIL_SECONDS * f64::from(sample_rate)).round() as usize;
+    &samples[..samples.len().saturating_sub(tail)]
+}
+
+/// Shortens every pause longer than 0.2 s to `scale` (at most 1) of its
+/// length, as sherpa-onnx's `GeneratedAudio::ScaleSilence` does to the
+/// audio it returns.
+fn shorten_pauses(samples: &[f32], sample_rate: u32, scale: f32) -> Vec<f32> {
+    let min_pause = (f64::from(sample_rate) * 0.2) as usize;
+    let mut pauses = Vec::new();
+    let mut quiet_from = None;
+    for (i, sample) in samples.iter().enumerate() {
+        if sample.abs() <= 0.01 {
+            quiet_from.get_or_insert(i);
+        } else if let Some(start) = quiet_from.take() {
+            if i - start >= min_pause {
+                pauses.push(start..i);
+            }
+        }
+    }
+    if let Some(start) = quiet_from {
+        if samples.len() - start > min_pause {
+            pauses.push(start..samples.len());
+        }
+    }
+    let mut out = Vec::with_capacity(samples.len());
+    let mut copied = 0;
+    for pause in pauses {
+        let keep = (pause.len() as f32 * scale) as usize;
+        out.extend_from_slice(&samples[copied..pause.start + keep]);
+        copied = pause.end;
+    }
+    out.extend_from_slice(&samples[copied..]);
+    out
+}
+
 fn existing(dir: &Path, names: &[&str]) -> Result<String> {
     names
         .iter()
@@ -300,6 +343,12 @@ impl Synthesizer for SherpaEngine {
             phoneme_codepoints: phonemes,
             ..Default::default()
         };
+        let pause_scale = config.silence_scale;
+        if self.family == Family::Kitten {
+            // The tail is measured in the model's own output, so pauses are
+            // shortened after it is dropped, not by sherpa-onnx before.
+            config.silence_scale = 1.0;
+        }
         if self.family == Family::Pocket {
             let recording = self
                 .recordings
@@ -318,13 +367,19 @@ impl Synthesizer for SherpaEngine {
         if cancel.load(Ordering::Relaxed) {
             return Ok(None);
         }
+        let sample_rate = audio.sample_rate().max(1) as u32;
         let mut samples = audio.samples().to_vec();
-        if self.family == Family::Pocket {
-            level(&mut samples);
+        match self.family {
+            Family::Pocket => level(&mut samples),
+            Family::Kitten => {
+                let speech = without_kitten_tail(&samples, sample_rate);
+                samples = shorten_pauses(speech, sample_rate, pause_scale);
+            }
+            Family::Supertonic | Family::Kokoro => {}
         }
         Ok(Some(Audio {
             samples,
-            sample_rate: audio.sample_rate().max(1) as u32,
+            sample_rate,
         }))
     }
 }
@@ -424,7 +479,7 @@ impl EngineProvider for EngineCache {
 
 #[cfg(test)]
 mod tests {
-    use super::level;
+    use super::{level, shorten_pauses, without_kitten_tail};
 
     fn loudness(samples: &[f32]) -> f32 {
         (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
@@ -462,6 +517,44 @@ mod tests {
         let mut hot = tone(1.3);
         level(&mut hot);
         assert!(hot.iter().all(|s| s.abs() <= 0.95 + 1e-6));
+    }
+
+    #[test]
+    fn kitten_output_loses_the_tail_kitten_itself_drops() {
+        let audio: Vec<f32> = (0..24_000).map(|i| i as f32).collect();
+        assert_eq!(without_kitten_tail(&audio, 24_000), &audio[..19_000]);
+        // The same 208 ms at another sample rate.
+        assert_eq!(without_kitten_tail(&audio, 48_000), &audio[..14_000]);
+        assert!(without_kitten_tail(&audio[..5_000], 24_000).is_empty());
+        assert!(without_kitten_tail(&audio[..100], 24_000).is_empty());
+        assert!(without_kitten_tail(&[], 24_000).is_empty());
+    }
+
+    #[test]
+    fn pauses_longer_than_a_fifth_of_a_second_are_shortened() {
+        let speech = || vec![0.5; 2_400];
+        let pause = |ms: usize| vec![0.0; 24 * ms];
+        let audio = [
+            speech(),
+            pause(300),
+            speech(),
+            pause(100),
+            speech(),
+            pause(500),
+        ]
+        .concat();
+        let expected = [
+            speech(),
+            pause(60),
+            speech(),
+            pause(100),
+            speech(),
+            pause(100),
+        ]
+        .concat();
+        assert_eq!(shorten_pauses(&audio, 24_000, 0.2), expected);
+        assert_eq!(shorten_pauses(&audio, 24_000, 1.0), audio);
+        assert!(shorten_pauses(&[], 24_000, 0.2).is_empty());
     }
 
     #[test]
