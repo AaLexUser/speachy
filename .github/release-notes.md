@@ -3,7 +3,8 @@ Select text anywhere, press ⌃⌥S, and hear it read aloud by a text-to-speech 
 
 ## What's new
 
-- **Speed changes at once, and no words are lost.** In 0.1.4 a new speed was heard only from the next sentence, and at higher speeds the voice dropped words. Now the voice always speaks at its natural pace and the speed is applied as the audio plays, the way a video player does it: the change is heard immediately, in the middle of a sentence, and the pitch stays the same. The shortcuts are unchanged: ⌃⌥= faster, ⌃⌥- slower, ⌃⌥0 back to normal speed and, pressed again, back to yours.
+- **Captions.** While Speachy reads, the line being read can float above the pill, with the word you are hearing highlighted and slightly larger. Numbers are shown as written: "3,5 млрд" stays highlighted while "три с половиной миллиарда" is read. The captions let clicks through to the app under them, and they follow speed changes and pauses. They are off by default: turn on **Show captions** under Settings. With captions on, the pill shrinks to its controls.
+- **KittenTTS no longer ends each sentence with noise.** Its chunks ended with a hiss, sometimes a murmur, and a click that were not in the text. They are gone, and the gaps between sentences are shorter. Pauses inside a sentence now have the length the voice gives them.
 
 ## Downloads
 
