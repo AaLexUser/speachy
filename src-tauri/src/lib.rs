@@ -15,7 +15,7 @@ mod updates;
 mod windows;
 
 use speachy_core::audio::SystemAudio;
-use speachy_core::pipeline::{SpeechEvent, State};
+use speachy_core::pipeline::SpeechEvent;
 use speachy_core::session::{Event, Paths, Session};
 use state::AppState;
 use std::sync::{Arc, Mutex};
@@ -35,20 +35,11 @@ fn on_engine_event(app: &AppHandle, event: &Event) {
     match event {
         Event::Speech(speech) => {
             let _ = app.emit("speech", speech);
-            match speech {
-                SpeechEvent::Started { .. } => {
-                    let app = app.clone();
-                    std::thread::spawn(move || {
-                        if app.state::<AppState>().session.settings().show_overlay {
-                            windows::show_overlay(&app);
-                        }
-                    });
-                }
-                SpeechEvent::State { state: State::Idle } => {
-                    let app = app.clone();
-                    std::thread::spawn(move || speech::hide_overlay_when_done(&app));
-                }
-                _ => {}
+            // The engine's state is set before a state change is reported,
+            // so another thread that asks sees the new one.
+            if let SpeechEvent::Started { .. } | SpeechEvent::State { .. } = speech {
+                let app = app.clone();
+                std::thread::spawn(move || speech::sync_floating(&app));
             }
         }
         Event::Download(download) => {
@@ -56,6 +47,8 @@ fn on_engine_event(app: &AppHandle, event: &Event) {
         }
         Event::Settings(settings) => {
             let _ = app.emit("settings", settings);
+            let app = app.clone();
+            std::thread::spawn(move || speech::sync_floating(&app));
         }
         Event::Notice(message) => {
             let (app, message) = (app.clone(), message.clone());
@@ -95,7 +88,7 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     tray::create(&handle)?;
-    windows::create_overlay(&handle)?;
+    windows::create_floating(&handle)?;
     windows::create_main(&handle, !hidden)?;
     #[cfg(target_os = "macos")]
     if hidden {

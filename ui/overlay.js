@@ -11,15 +11,19 @@ const PAUSE = '<path d="M2.5 1.5h2.4v9H2.5zm4.6 0h2.4v9H7.1z" />';
 const PLAY = '<path d="M3 1.5v9L10.5 6z" />';
 const TEXT = { loading: "Loading voice…", preparing: "Preparing…", paused: "Paused" };
 
-const view = { state: "idle", session: null, chunks: [], playing: -1, notice: null, speed: null };
+const view = { state: "idle", session: null, chunks: [], playing: -1, notice: null, speed: null, captions: null };
 let noticeTimer;
 
 function render() {
   pill.dataset.state = view.state;
+  pill.classList.toggle("compact", Boolean(view.captions));
   pauseIcon.innerHTML = view.state === "paused" ? PLAY : PAUSE;
   document.getElementById("pause").title = view.state === "paused" ? "Resume" : "Pause";
   if (view.notice) {
     label.textContent = view.notice;
+  } else if (view.state === "speaking" && view.captions) {
+    // The captions show the words; the pill does not repeat them.
+    label.textContent = "";
   } else if (view.state === "speaking" && view.chunks[view.playing]) {
     // The words being read give a better sense of position than a counter.
     label.textContent = view.chunks[view.playing].text;
@@ -186,6 +190,10 @@ listen("notice", ({ payload }) => flash(payload));
 listen("settings", ({ payload }) => {
   const changed = view.speed && view.speed.speed !== payload.speed;
   view.speed = { speed: payload.speed, speed_before_reset: payload.speed_before_reset };
+  if (view.captions !== payload.captions) {
+    view.captions = payload.captions;
+    render();
+  }
   // The readout has the number; the label says what changed.
   if (changed) flash("Speed");
   else renderSpeed();
@@ -199,5 +207,6 @@ render();
 engine("snapshot").then(({ settings }) => {
   // A settings event may already have brought a newer speed.
   view.speed ??= { speed: settings.speed, speed_before_reset: settings.speed_before_reset };
-  renderSpeed();
+  view.captions ??= settings.captions;
+  render();
 });

@@ -3,7 +3,8 @@
 
 use serde_json::{json, Value};
 use speachy_core::audio::CaptureAudio;
-use speachy_core::engine::{Audio, EngineKey, EngineProvider, SynthRequest, Synthesizer};
+use speachy_core::captions::Word;
+use speachy_core::engine::{Audio, EngineKey, EngineProvider, Speech, SynthRequest, Synthesizer};
 use speachy_core::pipeline::{Outcome, SpeechEvent};
 use speachy_core::session::{Command, Event, Paths, Session};
 use std::sync::atomic::AtomicBool;
@@ -20,12 +21,19 @@ struct FakeEngines {
 }
 
 impl Synthesizer for FakeEngines {
-    fn synthesize(&self, req: &SynthRequest, _: &Arc<AtomicBool>) -> anyhow::Result<Option<Audio>> {
+    fn synthesize(
+        &self,
+        req: &SynthRequest,
+        _: &Arc<AtomicBool>,
+    ) -> anyhow::Result<Option<Speech>> {
         let request = (req.text.to_string(), req.lang.to_string(), req.sid);
         self.requests.lock().unwrap().push(request);
-        Ok(Some(Audio {
-            samples: vec![0.1; req.text.len() * 10],
-            sample_rate: 1000,
+        Ok(Some(Speech {
+            audio: Audio {
+                samples: vec![0.1; req.text.len() * 10],
+                sample_rate: 1000,
+            },
+            spoken: None,
         }))
     }
 }
@@ -301,6 +309,37 @@ fn commands_and_events_have_a_stable_json_shape() {
         event,
         json!({ "event": "speech", "data": { "type": "chunk_playing", "session": 3, "index": 1 } })
     );
+    let event = serde_json::to_value(Event::Speech(SpeechEvent::WordPlaying {
+        session: 3,
+        index: 1,
+        word: 4,
+    }))
+    .unwrap();
+    assert_eq!(
+        event,
+        json!({ "event": "speech", "data": { "type": "word_playing", "session": 3, "index": 1, "word": 4 } })
+    );
+    let event = serde_json::to_value(Event::Speech(SpeechEvent::ChunkReady {
+        session: 3,
+        index: 1,
+        audio_secs: 0.5,
+        synth_secs: 0.25,
+        levels: vec![40, 0],
+        words: vec![Word {
+            text: "3,5 млрд".into(),
+            start_secs: 0.25,
+            line: 0,
+        }],
+    }))
+    .unwrap();
+    assert_eq!(
+        event,
+        json!({ "event": "speech", "data": {
+            "type": "chunk_ready", "session": 3, "index": 1, "audio_secs": 0.5, "synth_secs": 0.25,
+            "levels": [40, 0],
+            "words": [{ "text": "3,5 млрд", "start_secs": 0.25, "line": 0 }],
+        } })
+    );
 }
 
 const LONG: &str = "One sentence to read. Another one follows it. Then a third. \
@@ -430,4 +469,18 @@ fn reset_speed_reaches_speech_in_progress() {
     // Unreset it would be five sevenths of it.
     assert!(heard > natural * 0.9, "{heard} of {natural} samples");
     assert!(heard <= natural * 1.01, "{heard} of {natural} samples");
+}
+
+#[test]
+fn captions_are_off_by_default_and_can_be_turned_on() {
+    let rig = rig(&["supertonic-3"]);
+    let snapshot = rig.run(json!({ "cmd": "snapshot" })).unwrap();
+    assert_eq!(snapshot["settings"]["captions"], false);
+    let result = rig
+        .run(json!({ "cmd": "update_settings", "patch": { "captions": true } }))
+        .unwrap();
+    assert_eq!(result["settings"]["captions"], true);
+    rig.events_until(|e| matches!(e, Event::Settings(s) if s.captions));
+    let snapshot = rig.run(json!({ "cmd": "snapshot" })).unwrap();
+    assert_eq!(snapshot["settings"]["captions"], true);
 }

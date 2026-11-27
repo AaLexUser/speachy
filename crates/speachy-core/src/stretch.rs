@@ -71,6 +71,12 @@ impl Stretcher {
         }
     }
 
+    /// How far into the input the output has got, in samples: the end of
+    /// the last block's frame.
+    pub fn position(&self) -> usize {
+        self.natural
+    }
+
     /// The most samples one block appends.
     pub fn block_len(&self) -> usize {
         self.hop

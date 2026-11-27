@@ -64,10 +64,13 @@ commands, as `{"cmd": "<name>", …}`:
 | `preload` | | `{"model": id}` once the default voice is loaded |
 
 Events (`session::Event`) are `{"event": "<kind>", "data": …}` with kinds
-`speech` (state changes, chunk ready / playing, finished), `download`,
-`settings` and `notice`. A `chunk_ready` event carries the chunk's loudness
-over time (`levels`, one value from 0 to 100 for every 40 ms of audio), which
-is what the pill's bars draw.
+`speech` (state changes, chunk ready / playing, word playing, finished),
+`download`, `settings` and `notice`. A `chunk_ready` event carries the
+chunk's loudness over time (`levels`, one value from 0 to 100 for every 40 ms
+of audio), which is what the pill's bars draw, and its `words` for captions
+(`text` as written, `start_secs` at natural pace, `line`; see
+`captions.rs`). `word_playing` (`index`, `word`) is sent by the audio thread
+when playback reaches a word, so it follows speed, pause and resume.
 
 **Adding behaviour:** add a method to `Session`, a `Command` variant that
 calls it, and a test in `crates/speachy-core/tests/session.rs`. Expose it in
@@ -88,6 +91,7 @@ speachy-cli plan "Hello. Привет, как дела?"      # chunks, language
 speachy-cli detect "Dies ist ein Test."
 speachy-cli speak --no-audio "Timing only."       # synthesize, discard the audio
 speachy-cli speak --out out.wav "Keep the audio." # write a WAV instead of playing
+speachy-cli speak --json --no-audio "3,5 млрд рублей." | grep word_playing   # the words, as they are read
 speachy-cli settings speed=1.2 shortcuts.stop=F9
 speachy-cli audio                     # the sound output device and whether it can be used
 speachy-cli run '{"cmd":"snapshot"}'  # any engine command, as the app sends it
@@ -137,7 +141,12 @@ scripts/check-layers.sh
   synthesizer and a virtual sound card: ordering, gapless output, the
   look-ahead bound, pause, stop, replacement, shutdown.
 - `crates/speachy-core/tests/session.rs` tests the command surface.
-- `crates/speachy-cli/tests/cli.rs` runs the built binary.
+- `crates/speachy-core/tests/captions.rs` holds word timing to its measured
+  accuracy on recordings in `tests/fixtures/captions.json`
+  (`scripts/make-caption-fixtures.py` makes them; it needs the models).
+- `crates/speachy-cli/tests/cli.rs` runs the built binary. Set
+  `SPEACHY_TEST_MODELS` to a models directory with `supertonic-3` to also
+  run its tests that synthesize.
 - None of these download models. To check real synthesis, install a model
   into a scratch `--home` and use `speak --no-audio` or `--out`.
 

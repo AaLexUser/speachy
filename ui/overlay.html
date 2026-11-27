@@ -91,6 +91,18 @@
         letter-spacing: 0.01em;
       }
       #speed[hidden] { display: none; }
+      /* With captions on, the pill does not repeat the words: while its
+         label is empty it is only as wide as its controls. */
+      .pill.compact {
+        left: 50%;
+        right: auto;
+        transform: translateX(-50%);
+      }
+      .pill.compact #label {
+        flex: none;
+        max-width: 200px;
+      }
+      .pill.compact #label:empty { display: none; }
     </style>
   </head>
   <body>

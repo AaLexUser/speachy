@@ -27,6 +27,9 @@ bottom of the screen shows what is being read.
   short, so speech starts as soon as it is synthesized; the following ones are
   synthesized ahead of playback and queued back to back, so there are no gaps
   between them. See [How the pipeline works](#how-the-pipeline-works).
+- **Captions, if you want them.** Turn on *Show captions* and the words being
+  read float above the pill, the current one highlighted, as in short videos.
+  They are off by default.
 - **Choose and download models.** The Models tab lists the supported models
   with their size and languages; downloads resume if interrupted.
 - **Choose voices.** Pick a default voice and, if you like, a different voice
@@ -174,10 +177,11 @@ crates/speachy-core/   The engine
   src/english.rs         English phonemes for Kokoro
   src/pipeline.rs        synthesize-ahead pipeline, pause / stop
   src/audio.rs           gapless output queue
+  src/captions.rs        when each word is heard, and caption lines
 crates/speachy-cli/    Headless front end: subcommands and a JSON channel
 src-tauri/             The desktop shell (Tauri 2): windows, menu-bar icon,
                        shortcuts, reading the selection
-ui/                    Settings window and overlay pill (no build step)
+ui/                    Settings window, overlay pill and captions (no build step)
 ```
 
 ```sh
@@ -266,3 +270,7 @@ those checks cannot judge is how the voices sound.
   "C" on a QWERTY layout.
 - The pill follows the pointer to the display it is on; with several
   displays this has not been tried on real hardware.
+- Captions estimate when each word starts from the text and the loudness of
+  the audio. In Russian 94 % of words are within 0.15 s; English is less
+  exact. Numbers and abbreviations are highlighted as written, for as long
+  as they take to read.

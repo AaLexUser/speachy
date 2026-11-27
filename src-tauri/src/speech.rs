@@ -3,6 +3,7 @@
 
 use crate::selection;
 use crate::state::AppState;
+use crate::windows::Floating;
 use speachy_core::pipeline::State;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
@@ -18,30 +19,35 @@ pub fn notice(app: &AppHandle, message: &str) {
 pub fn show_pill_briefly(app: &AppHandle) {
     const SHOWN_FOR: Duration = Duration::from_millis(2500);
     let state = app.state::<AppState>();
-    if !state.session.settings().show_overlay {
-        return;
-    }
     *state.notice_until.lock().unwrap() = Some(Instant::now() + SHOWN_FOR);
-    crate::windows::show_overlay(app);
+    sync_floating(app);
     let app = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(SHOWN_FOR);
-        hide_overlay_when_done(&app);
+        sync_floating(&app);
     });
 }
 
-/// Hides the pill unless something is being spoken or a notice is still
-/// meant to be on screen.
-pub fn hide_overlay_when_done(app: &AppHandle) {
+/// What should be on screen now, from the settings and what the engine is
+/// doing.
+fn floating(app: &AppHandle) -> Floating {
     let state = app.state::<AppState>();
-    let notice_showing = state
+    let settings = state.session.settings();
+    let speaking = state.session.speech_state() != State::Idle;
+    let notice = state
         .notice_until
         .lock()
         .unwrap()
         .is_some_and(|until| Instant::now() < until);
-    if !notice_showing && state.session.speech_state() == State::Idle {
-        crate::windows::hide_overlay(app);
+    Floating {
+        pill: settings.show_overlay && (speaking || notice),
+        captions: settings.captions && speaking,
     }
+}
+
+/// Brings the floating windows in line with the settings and the engine.
+pub fn sync_floating(app: &AppHandle) {
+    crate::windows::set_floating(app, floating(app));
 }
 
 /// Speaks `text` with the user's voices, reporting a failure as a notice.

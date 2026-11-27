@@ -13,6 +13,8 @@ use std::time::{Duration, Instant};
 pub enum PlayEvent {
     /// The first sample of chunk `index` reached the output.
     Started(usize),
+    /// Mark `n` of chunk `index` reached the output: `Mark(index, n)`.
+    Mark(usize, usize),
     /// Chunk `index` and the pause after it have been played.
     Finished(usize),
 }
@@ -31,8 +33,10 @@ pub trait AudioBackend: Send + Sync {
 /// on the thread that created it.
 pub trait AudioStream {
     /// Queues `audio` followed by `pause_after` of silence. Chunks play in
-    /// the order pushed, back to back.
-    fn push(&mut self, index: usize, audio: Audio, pause_after: Duration);
+    /// the order pushed, back to back. `marks` are positions in `audio`, in
+    /// samples, in ascending order. Each is reported as [`PlayEvent::Mark`]
+    /// when playback reaches it.
+    fn push(&mut self, index: usize, audio: Audio, marks: Vec<usize>, pause_after: Duration);
     /// Plays everything from the next block on `speed` times faster, at
     /// the same pitch; the chunk that is playing changes speed too.
     fn set_speed(&mut self, speed: f32);
@@ -60,9 +64,14 @@ impl Speed {
     }
 }
 
-/// A chunk as an audio source that reports when it starts and ends.
+/// A chunk as an audio source that reports when it starts, when it reaches
+/// each mark, and when it ends.
 struct ChunkSource {
     index: usize,
+    /// Positions in the chunk at natural pace, in samples, ascending.
+    marks: Vec<usize>,
+    /// The first mark not yet reported.
+    next_mark: usize,
     /// The chunk and the silence after it, both in natural time.
     stretcher: Stretcher,
     /// The block being played, and how much of it has been.
@@ -82,6 +91,7 @@ impl ChunkSource {
     fn new(
         index: usize,
         audio: Audio,
+        marks: Vec<usize>,
         pause_after: Duration,
         speed: Speed,
         on_event: PlayCallback,
@@ -92,6 +102,8 @@ impl ChunkSource {
         let stretcher = Stretcher::new(samples, audio.sample_rate);
         Self {
             index,
+            marks,
+            next_mark: 0,
             block: Vec::with_capacity(stretcher.block_len()),
             stretcher,
             played: 0,
@@ -101,6 +113,17 @@ impl ChunkSource {
             finished: false,
             auto_finish: true,
             on_event,
+        }
+    }
+
+    /// Reports every mark before input position `position`.
+    fn report_marks(&mut self, position: usize) {
+        while let Some(&mark) = self.marks.get(self.next_mark) {
+            if mark >= position {
+                break;
+            }
+            (self.on_event)(PlayEvent::Mark(self.index, self.next_mark));
+            self.next_mark += 1;
         }
     }
 
@@ -120,6 +143,9 @@ impl Iterator for ChunkSource {
             self.block.clear();
             self.played = 0;
             if !self.stretcher.next_block(self.speed.get(), &mut self.block) {
+                if self.started {
+                    self.report_marks(usize::MAX);
+                }
                 if self.auto_finish {
                     self.finish();
                 }
@@ -129,6 +155,7 @@ impl Iterator for ChunkSource {
                 self.started = true;
                 (self.on_event)(PlayEvent::Started(self.index));
             }
+            self.report_marks(self.stretcher.position());
         }
         self.played += 1;
         Some(self.block[self.played - 1])
@@ -182,10 +209,11 @@ impl AudioBackend for SystemAudio {
 }
 
 impl AudioStream for SystemStream {
-    fn push(&mut self, index: usize, audio: Audio, pause_after: Duration) {
+    fn push(&mut self, index: usize, audio: Audio, marks: Vec<usize>, pause_after: Duration) {
         let source = ChunkSource::new(
             index,
             audio,
+            marks,
             pause_after,
             self.speed.clone(),
             self.on_event.clone(),
@@ -368,10 +396,11 @@ impl AudioBackend for CaptureAudio {
 }
 
 impl AudioStream for CaptureStream {
-    fn push(&mut self, index: usize, audio: Audio, pause_after: Duration) {
+    fn push(&mut self, index: usize, audio: Audio, marks: Vec<usize>, pause_after: Duration) {
         let mut source = ChunkSource::new(
             index,
             audio,
+            marks,
             pause_after,
             self.speed.clone(),
             self.on_event.clone(),
@@ -416,6 +445,141 @@ mod tests {
             }
         }
         now - start
+    }
+
+    const RATE: u32 = 24_000;
+    /// One block of output, and how far from its ideal place a frame may be
+    /// taken: see `Stretcher`.
+    const HOP: f32 = RATE as f32 * 0.015;
+    const REACH: f32 = RATE as f32 * 0.012;
+
+    fn noise(n: usize) -> Vec<f32> {
+        let mut state = 0x2545_f491u32;
+        (0..n)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                state as f32 / u32::MAX as f32 - 0.5
+            })
+            .collect()
+    }
+
+    /// Pulls a chunk of two seconds of noise sample by sample, at the speed
+    /// `speed` gives for the number of samples pulled so far. Returns each
+    /// mark with the number of samples pulled before it was reported.
+    fn marks_heard(marks: &[usize], speed: impl Fn(usize) -> f32) -> Vec<(usize, usize)> {
+        let pulled = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let (count, log) = (pulled.clone(), heard.clone());
+        let on_event: PlayCallback = Arc::new(move |event| {
+            if let PlayEvent::Mark(0, n) = event {
+                log.lock().unwrap().push((n, count.load(Ordering::SeqCst)));
+            }
+        });
+        let shared = Speed::default();
+        let audio = Audio {
+            samples: noise(2 * RATE as usize),
+            sample_rate: RATE,
+        };
+        let mut source = ChunkSource::new(
+            0,
+            audio,
+            marks.to_vec(),
+            Duration::from_millis(100),
+            shared.clone(),
+            on_event,
+        );
+        loop {
+            shared.set(speed(pulled.load(Ordering::SeqCst)));
+            if source.next().is_none() {
+                break;
+            }
+            pulled.fetch_add(1, Ordering::SeqCst);
+        }
+        let heard = heard.lock().unwrap().clone();
+        heard
+    }
+
+    /// A mark is reported with the block that plays it: within a block of
+    /// the time the output reaches it, give or take how far a frame may move.
+    /// Faster than normal, part of each block's input is skipped, and a mark
+    /// in it comes with the next block.
+    fn assert_in_time(mark: usize, pulled: usize, expected: f32, speed: f32) {
+        let early = (HOP + REACH) / speed + HOP;
+        let late = REACH / speed + HOP;
+        let pulled = pulled as f32;
+        assert!(
+            pulled >= expected - early && pulled <= expected + late,
+            "mark at {mark} reported after {pulled} samples, expected near {expected} at speed {speed}"
+        );
+    }
+
+    #[test]
+    fn marks_are_reported_when_playback_reaches_them() {
+        let marks: Vec<usize> = (0..20).map(|i| i * 2_300).collect();
+        for speed in [0.5, 1.0, 2.5] {
+            let heard = marks_heard(&marks, |_| speed);
+            let order: Vec<usize> = heard.iter().map(|(n, _)| *n).collect();
+            assert_eq!(order, (0..marks.len()).collect::<Vec<_>>(), "speed {speed}");
+            assert_eq!(heard[0].1, 0, "the first mark comes with the first block");
+            for &(n, pulled) in &heard {
+                assert_in_time(marks[n], pulled, marks[n] as f32 / speed, speed);
+            }
+        }
+
+        // From normal speed to double speed between two marks.
+        let switch = 12_000;
+        let heard = marks_heard(&marks, |pulled| if pulled < switch { 1.0 } else { 2.0 });
+        assert_eq!(heard.len(), marks.len());
+        for &(n, pulled) in &heard {
+            let m = marks[n] as f32;
+            let (expected, speed) = if m < switch as f32 {
+                (m, 1.0)
+            } else {
+                (switch as f32 + (m - switch as f32) / 2.0, 2.0)
+            };
+            assert_in_time(marks[n], pulled, expected, speed);
+        }
+    }
+
+    #[test]
+    fn several_marks_in_one_block_are_all_reported_in_order() {
+        // At speed 4 a block plays 60 ms of the chunk: many short words.
+        let marks: Vec<usize> = (0..400).map(|i| i * 100).collect();
+        let heard = marks_heard(&marks, |_| 4.0);
+        let order: Vec<usize> = heard.iter().map(|(n, _)| *n).collect();
+        assert_eq!(order, (0..marks.len()).collect::<Vec<_>>());
+        assert!(heard.windows(2).any(|w| w[0].1 == w[1].1));
+        // Marks past the end of the audio are still reported, before the end.
+        let heard = marks_heard(&[0, 10 * RATE as usize], |_| 1.0);
+        assert_eq!(heard.len(), 2);
+    }
+
+    #[test]
+    fn no_mark_is_reported_while_nothing_is_pulled() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let log = events.clone();
+        let mut source = ChunkSource::new(
+            0,
+            Audio {
+                samples: noise(RATE as usize),
+                sample_rate: RATE,
+            },
+            vec![0, 5_000, 10_000],
+            Duration::ZERO,
+            Speed::default(),
+            Arc::new(move |event| log.lock().unwrap().push(event)),
+        );
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(events.lock().unwrap().is_empty());
+        source.next();
+        assert_eq!(
+            *events.lock().unwrap(),
+            [PlayEvent::Started(0), PlayEvent::Mark(0, 0)]
+        );
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(events.lock().unwrap().len(), 2);
     }
 
     #[test]

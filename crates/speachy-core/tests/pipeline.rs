@@ -2,12 +2,14 @@
 //! sound card.
 
 use speachy_core::audio::CaptureAudio;
-use speachy_core::engine::{Audio, EngineKey, EngineProvider, SynthRequest, Synthesizer};
+use speachy_core::captions::Word;
+use speachy_core::engine::{Audio, EngineKey, EngineProvider, Speech, SynthRequest, Synthesizer};
 use speachy_core::pipeline::{
     loudness_over_time, Outcome, SpeakOptions, Speaker, SpeechEvent, State, LEVEL_WINDOW,
 };
 use speachy_core::plan::PlannedChunk;
 use speachy_core::text::Boundary;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Receiver};
 use std::sync::{Arc, Mutex};
@@ -28,6 +30,13 @@ struct FakeEngine {
     loaded: AtomicBool,
 }
 
+/// What the fake reads for a text: "3,5 bn" in words, everything else as
+/// written.
+fn spoken(text: &str) -> Option<String> {
+    text.contains("3,5 bn")
+        .then(|| text.replace("3,5 bn", "three and a half billion"))
+}
+
 fn level(n: usize) -> f32 {
     (n + 1) as f32 / 100.0
 }
@@ -37,7 +46,7 @@ impl Synthesizer for FakeEngine {
         &self,
         req: &SynthRequest,
         cancel: &Arc<AtomicBool>,
-    ) -> anyhow::Result<Option<Audio>> {
+    ) -> anyhow::Result<Option<Speech>> {
         let n: usize = req.text.rsplit('-').next().unwrap().parse().unwrap_or(0);
         self.calls
             .lock()
@@ -51,9 +60,12 @@ impl Synthesizer for FakeEngine {
         if req.text.starts_with("bad") {
             anyhow::bail!("cannot pronounce {}", req.text);
         }
-        Ok(Some(Audio {
-            samples: vec![level(n); (self.secs * RATE as f32) as usize],
-            sample_rate: RATE,
+        Ok(Some(Speech {
+            audio: Audio {
+                samples: vec![level(n); (self.secs * RATE as f32) as usize],
+                sample_rate: RATE,
+            },
+            spoken: spoken(req.text),
         }))
     }
 }
@@ -660,4 +672,135 @@ fn a_speed_change_when_nothing_is_spoken_does_nothing() {
     for &(n, len, _) in &heard {
         assert_near(&format!("chunk {n}"), len, 1000.0, 0.01, &heard);
     }
+}
+
+/// The words of every chunk as `chunk_ready` gave them.
+fn ready_words(events: &[SpeechEvent]) -> HashMap<usize, Vec<Word>> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            SpeechEvent::ChunkReady { index, words, .. } => Some((*index, words.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// (chunk, word) of every `word_playing`.
+fn words_played(events: &[SpeechEvent]) -> Vec<(usize, usize)> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            SpeechEvent::WordPlaying { index, word, .. } => Some((*index, *word)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn every_word_is_reported_once_in_order_within_its_chunk() {
+    let rig = rig(0.4, 0, 20.0);
+    let session = rig
+        .speaker
+        .speak(plan("one two three four five", 4), opts(20.0));
+    let events = rig.until_finished(session);
+    assert_eq!(outcome(&events, session), Some((Outcome::Completed, None)));
+    let ready = ready_words(&events);
+    let expected: Vec<(usize, usize)> = (0..4)
+        .flat_map(|i| (0..ready[&i].len()).map(move |w| (i, w)))
+        .collect();
+    assert_eq!(ready[&0].len(), 5);
+    assert_eq!(words_played(&events), expected);
+    // Every word of chunk i lies between chunk i and chunk i + 1 starting.
+    let mut chunk = None;
+    for event in &events {
+        match event {
+            SpeechEvent::ChunkPlaying { index, .. } => chunk = Some(*index),
+            SpeechEvent::WordPlaying { index, .. } => assert_eq!(Some(*index), chunk),
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn chunk_ready_carries_the_words_of_the_chunk() {
+    let rig = rig(1.0, 0, f32::INFINITY);
+    let session = rig.speaker.speak(plan("Sold 3,5 bn coins", 1), opts(20.0));
+    let events = rig.until_finished(session);
+    let (words, audio_secs) = events
+        .iter()
+        .find_map(|e| match e {
+            SpeechEvent::ChunkReady {
+                words, audio_secs, ..
+            } => Some((words.clone(), *audio_secs)),
+            _ => None,
+        })
+        .unwrap();
+    let texts: Vec<&str> = words.iter().map(|w| w.text.as_str()).collect();
+    // The rewritten run is one word, timed as it was read: "three and a half
+    // billion" takes most of the chunk.
+    assert_eq!(texts, ["Sold", "3,5 bn", "coins-0"]);
+    assert_eq!(words[0].start_secs, 0.0);
+    assert!(words[1].start_secs > 0.0);
+    assert!(
+        words[2].start_secs > 0.7 * audio_secs && words[2].start_secs < audio_secs,
+        "{words:?} in {audio_secs} s"
+    );
+    assert_eq!(words_played(&events), [(0, 0), (0, 1), (0, 2)]);
+}
+
+#[test]
+fn a_stopped_session_reports_no_more_words() {
+    let rig = rig(1.0, 0, 1.0);
+    let first = rig.speaker.speak(plan("a b c d e f g h", 10), opts(3.0));
+    rig.wait_for(|e| matches!(e, SpeechEvent::WordPlaying { word: 1, .. }));
+    assert!(rig.speaker.stop());
+    rig.until_finished(first);
+    // Another session, to the end: nothing of the first is reported meanwhile.
+    let second = rig.speaker.speak(plan("i j", 1), opts(3.0));
+    let events = rig.until_finished(second);
+    for event in &events {
+        if let SpeechEvent::WordPlaying { session, .. } = event {
+            assert_eq!(*session, second, "{events:?}");
+        }
+    }
+    assert_eq!(words_played(&events), [(0, 0), (0, 1)]);
+}
+
+#[test]
+fn a_paused_session_reports_no_words_until_resumed() {
+    let rig = rig(1.0, 0, 1.0);
+    let session = rig
+        .speaker
+        .speak(plan("one two three four five six", 2), opts(20.0));
+    rig.wait_for(|e| {
+        matches!(
+            e,
+            SpeechEvent::WordPlaying {
+                index: 0,
+                word: 1,
+                ..
+            }
+        )
+    });
+    rig.speaker.toggle_pause();
+    rig.wait_for(|e| {
+        matches!(
+            e,
+            SpeechEvent::State {
+                state: State::Paused
+            }
+        )
+    });
+    // At most the word of the block that was playing as the pause came.
+    std::thread::sleep(Duration::from_millis(500));
+    let during: Vec<SpeechEvent> = rig.events.try_iter().collect();
+    assert!(words_played(&during).len() <= 1, "{during:?}");
+
+    rig.speaker.toggle_pause();
+    let events = rig.until_finished(session);
+    assert_eq!(outcome(&events, session), Some((Outcome::Completed, None)));
+    let mut all = words_played(&during);
+    all.extend(words_played(&events));
+    assert_eq!(all.last(), Some(&(1, 5)));
+    assert!(all.windows(2).all(|w| w[0] < w[1]), "{all:?}");
 }
