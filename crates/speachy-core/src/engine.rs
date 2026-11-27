@@ -130,6 +130,17 @@ fn level(samples: &mut [f32]) {
     }
 }
 
+/// KittenTTS ends every output with noise, often a murmur, and a click. Its
+/// own code drops them (`audio = outputs[0][..., :-5000]`, 5000 samples at
+/// 24 kHz, in KittenML/KittenTTS `kittenml/kittentts_legacy/onnx_model.py`
+/// line 159); sherpa-onnx returns them.
+const KITTEN_TAIL_SECONDS: f64 = 5000.0 / 24000.0;
+
+fn without_kitten_tail(samples: &[f32], sample_rate: u32) -> &[f32] {
+    let tail = (KITTEN_TAIL_SECONDS * f64::from(sample_rate)).round() as usize;
+    &samples[..samples.len().saturating_sub(tail)]
+}
+
 fn existing(dir: &Path, names: &[&str]) -> Result<String> {
     names
         .iter()
@@ -315,6 +326,11 @@ impl Synthesizer for SherpaEngine {
             phoneme_codepoints: phonemes,
             ..Default::default()
         };
+        if self.family == Family::Kitten {
+            // The tail is measured in the model's own output: sherpa-onnx
+            // must not shorten pauses in it first.
+            config.silence_scale = 1.0;
+        }
         if self.family == Family::Pocket {
             let recording = self
                 .recordings
@@ -333,14 +349,20 @@ impl Synthesizer for SherpaEngine {
         if cancel.load(Ordering::Relaxed) {
             return Ok(None);
         }
+        let sample_rate = audio.sample_rate().max(1) as u32;
         let mut samples = audio.samples().to_vec();
-        if self.family == Family::Pocket {
-            level(&mut samples);
+        match self.family {
+            Family::Pocket => level(&mut samples),
+            Family::Kitten => {
+                let speech = without_kitten_tail(&samples, sample_rate).len();
+                samples.truncate(speech);
+            }
+            Family::Supertonic | Family::Kokoro => {}
         }
         Ok(Some(Speech {
             audio: Audio {
                 samples,
-                sample_rate: audio.sample_rate().max(1) as u32,
+                sample_rate,
             },
             spoken,
         }))
@@ -442,7 +464,7 @@ impl EngineProvider for EngineCache {
 
 #[cfg(test)]
 mod tests {
-    use super::level;
+    use super::{level, without_kitten_tail};
 
     fn loudness(samples: &[f32]) -> f32 {
         (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
@@ -480,6 +502,17 @@ mod tests {
         let mut hot = tone(1.3);
         level(&mut hot);
         assert!(hot.iter().all(|s| s.abs() <= 0.95 + 1e-6));
+    }
+
+    #[test]
+    fn kitten_output_loses_the_tail_kitten_itself_drops() {
+        let audio: Vec<f32> = (0..24_000).map(|i| i as f32).collect();
+        assert_eq!(without_kitten_tail(&audio, 24_000), &audio[..19_000]);
+        // The same 208 ms at another sample rate.
+        assert_eq!(without_kitten_tail(&audio, 48_000), &audio[..14_000]);
+        assert!(without_kitten_tail(&audio[..5_000], 24_000).is_empty());
+        assert!(without_kitten_tail(&audio[..100], 24_000).is_empty());
+        assert!(without_kitten_tail(&[], 24_000).is_empty());
     }
 
     #[test]
