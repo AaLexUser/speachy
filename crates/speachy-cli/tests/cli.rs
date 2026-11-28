@@ -314,3 +314,64 @@ fn plan_shows_what_the_voice_is_given_under_its_chunk() {
     assert!(output.status.success(), "{}", stdout(&output));
     assert_eq!(stdout(&output).lines().count(), 1);
 }
+
+#[cfg(unix)]
+#[test]
+fn speak_out_says_where_each_chunk_is_in_the_file() {
+    let Some(home) = home_with_models() else {
+        eprintln!("SPEACHY_TEST_MODELS is not set: nothing to synthesize with");
+        return;
+    };
+    let wav = home.path().join("out.wav");
+    let text = "Первый абзац короткий.\n\nВторой абзац чуть длиннее, но тоже не очень.";
+    let args = [
+        "speak",
+        "--json",
+        "--out",
+        wav.to_str().unwrap(),
+        "--voice",
+        "supertonic-3/F1",
+        "--lang",
+        "ru",
+        "-",
+    ];
+    let output = cli(home.path(), &args, Some(text));
+    assert!(output.status.success(), "{}", stdout(&output));
+    let lines: Vec<Value> = stdout(&output)
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    // The speech of each chunk, from its loudness: one value for every 40 ms.
+    let speech: Vec<f64> = lines
+        .iter()
+        .filter(|l| l["data"]["type"] == "chunk_ready")
+        .map(|l| l["data"]["levels"].as_array().unwrap().len() as f64 * 0.04)
+        .collect();
+    let summary = lines.iter().find(|l| l.get("file").is_some()).unwrap();
+    let chunks: Vec<f64> = summary["chunk_seconds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s.as_f64().unwrap())
+        .collect();
+    assert_eq!(chunks.len(), speech.len());
+    assert!(chunks.len() >= 2, "{chunks:?}");
+    // Each chunk is its own speech and the pause after it, which is never longer than 0.55 s. The
+    // two paragraphs differ by more than that, so chunks in another order would not pass.
+    assert!((speech[0] - speech[1]).abs() > 0.7, "{speech:?}");
+    for (seconds, speech) in chunks.iter().zip(&speech) {
+        assert!(
+            (speech - 0.04..speech + 0.6).contains(seconds),
+            "a chunk of {seconds} s for {speech} s of speech"
+        );
+    }
+
+    // The chunks add up to the file: its data holds 16-bit samples after a 44-byte header.
+    let rate = summary["sample_rate"].as_f64().unwrap();
+    let samples = (std::fs::metadata(&wav).unwrap().len() - 44) / 2;
+    let total: f64 = chunks.iter().sum();
+    assert!(
+        (total * rate - samples as f64).abs() < 1.0,
+        "{total} s at {rate} Hz is not {samples} samples"
+    );
+}

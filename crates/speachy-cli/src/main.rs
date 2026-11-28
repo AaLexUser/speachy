@@ -467,10 +467,24 @@ fn run_command(
                 return Err(message);
             }
             if let (Some(path), Some(capture)) = (out, capture) {
+                // One entry per chunk that was played, taken before `take` joins them: where each
+                // chunk is in the file, its pause included.
+                let chunk_seconds: Vec<f64> = capture
+                    .played
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|chunk| chunk.samples.len() as f64 / f64::from(chunk.sample_rate.max(1)))
+                    .collect();
                 let audio = capture.take();
                 wav::write(&path, &audio)
                     .map_err(|err| format!("could not write {}: {err}", path.display()))?;
-                let summary = json!({ "file": path, "seconds": audio.seconds(), "sample_rate": audio.sample_rate });
+                let summary = json!({
+                    "file": path,
+                    "seconds": audio.seconds(),
+                    "sample_rate": audio.sample_rate,
+                    "chunk_seconds": chunk_seconds,
+                });
                 if json_output {
                     print_line(&summary.to_string());
                 } else {

@@ -2,3 +2,4 @@
 /src-tauri/gen
 .DS_Store
 *.wav
+__pycache__/

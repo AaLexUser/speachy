@@ -162,7 +162,13 @@ see what the voice was given when a word is misread.
 `scripts/stress-eval.py marks` checks those marks against Russian sentences
 whose stress is marked (the file's header says who placed the marks), and says
 which words Speachy marks on another vowel, leaves unmarked or rewrites; it
-needs no model and runs on every pull request. It does not yet measure what the voice does with a mark.
+needs no model and runs on every pull request.
+`scripts/stress-eval.py heard` has the built app read those sentences aloud and
+a Russian phoneme recognizer listen, to say how often a word is heard off its
+gold vowel; it is run by hand, downloads the recognizer
+(`omogr/wav2vec2-lv-60-ru-ipa`, 1.26 GB, CC BY-NC-SA 4.0, a development tool
+that is not part of Speachy) and gives a rate with a range, not a verdict on a
+word. AGENTS.md says what its numbers mean.
 
 ## Engine and interface
 
