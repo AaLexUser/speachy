@@ -159,6 +159,10 @@ prints "е" for it, as most Russian text does (`stress.rs`). Words that can be
 read two ways, such as "замок" or "все", are left as written.
 `speachy-cli plan` shows the result under each chunk it changes, so you can
 see what the voice was given when a word is misread.
+`scripts/stress-eval.py marks` checks those marks against Russian sentences
+whose stress was written down by hand, and says which words Speachy marks on
+another vowel, leaves unmarked or rewrites; it needs no model and runs on every
+pull request. It does not yet measure what the voice does with a mark.
 
 ## Engine and interface
 
