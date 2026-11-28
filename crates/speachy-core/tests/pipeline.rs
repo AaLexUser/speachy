@@ -125,6 +125,7 @@ fn plan(prefix: &str, count: usize) -> Vec<PlannedChunk> {
     (0..count)
         .map(|n| PlannedChunk {
             text: format!("{prefix}-{n}"),
+            spoken: None,
             boundary: if n + 1 == count {
                 Boundary::End
             } else {

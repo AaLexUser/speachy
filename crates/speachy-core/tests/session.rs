@@ -186,6 +186,46 @@ fn plan_shows_chunks_languages_and_voices_without_speaking() {
 }
 
 #[test]
+fn a_plan_says_what_the_voice_is_given() {
+    let rig = rig(&["supertonic-3", "kokoro-v1.0"]);
+
+    // Russian read by Supertonic 3: numbers in words, stressed vowels marked.
+    let plan = rig
+        .run(json!({ "cmd": "plan", "text": "Вода стоит 15 рублей.", "lang": "ru" }))
+        .unwrap();
+    let chunk = &plan["chunks"][0];
+    assert_eq!(chunk["text"], "Вода стоит 15 рублей.");
+    assert_eq!(
+        chunk["spoken"],
+        "Вода\u{301} стоит пятна\u{301}дцать рубле\u{301}й."
+    );
+
+    // English read by Kokoro: digits in words.
+    let plan = rig
+        .run(json!({
+            "cmd": "plan", "text": "Take 3 apples.", "lang": "en",
+            "voice": { "model_id": "kokoro-v1.0", "voice_id": "bm_george" },
+        }))
+        .unwrap();
+    assert_eq!(plan["chunks"][0]["spoken"], "Take three apples.");
+
+    // Text that needs no rewriting has no spoken form.
+    let plain = rig
+        .run(json!({
+            "cmd": "plan", "text": "Take some apples.", "lang": "en",
+            "voice": { "model_id": "kokoro-v1.0", "voice_id": "bm_george" },
+        }))
+        .unwrap();
+    assert!(plain["chunks"][0].get("spoken").is_none());
+
+    // A language no rewriting exists for.
+    let german = rig
+        .run(json!({ "cmd": "plan", "text": "Das sind 3 Äpfel.", "lang": "de" }))
+        .unwrap();
+    assert!(german["chunks"][0].get("spoken").is_none());
+}
+
+#[test]
 fn settings_updates_persist_and_are_announced() {
     let rig = rig(&["supertonic-3"]);
     let result = rig

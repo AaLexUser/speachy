@@ -1,6 +1,6 @@
 //! Decides which voice reads each chunk of a text.
 
-use crate::catalog::{ModelInfo, VoiceInfo};
+use crate::catalog::{Family, ModelInfo, VoiceInfo};
 use crate::engine::EngineKey;
 use crate::settings::{Settings, VoiceRef};
 use crate::text::{self, Boundary, ChunkOptions};
@@ -9,7 +9,13 @@ use serde::Serialize;
 /// A chunk of text together with everything needed to synthesize it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PlannedChunk {
+    /// The chunk as written.
     pub text: String,
+    /// The chunk as the voice is given it, when that is not `text`: numbers,
+    /// units and abbreviations in words, the stressed vowel of Russian words
+    /// marked. `None` when the voice reads `text` as written.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spoken: Option<String>,
     pub boundary: Boundary,
     /// ISO 639-1 language the chunk is read in.
     pub lang: String,
@@ -36,6 +42,23 @@ struct Choice<'a> {
 /// couple of words is not enough to tell a language, however confident the
 /// detector is.
 const MIN_WEIGHT_FOR_OWN_LANGUAGE: usize = 20;
+
+/// What a model of `family` is given for `text` read in `lang`, when that is
+/// not `text` as written. Pure: no model and no files, only the stress table
+/// compiled into the engine.
+fn spoken(family: Family, lang: &str, text: &str) -> Option<String> {
+    let rewritten = match (family, lang) {
+        // Kokoro phonemizes English from `text`; the digits-in-words form is
+        // the words its phonemes stand for, as near as that can be told.
+        // KittenTTS looks words up in a lexicon, which has no digits.
+        (Family::Kokoro | Family::Kitten, "en") => crate::numbers::spell_out_english(text),
+        // Supertonic misreads Russian numbers, units and abbreviations, and
+        // sometimes stresses the wrong vowel.
+        (Family::Supertonic, "ru") => crate::stress::mark(&crate::russian::spell_out(text)),
+        _ => return None,
+    };
+    (rewritten != text).then_some(rewritten)
+}
 
 /// Plans how to speak `text` with the `installed` models.
 pub fn plan(
@@ -80,6 +103,7 @@ pub fn plan(
             };
             let (choice, lang) = resolve(&lang, settings, installed, &default);
             PlannedChunk {
+                spoken: spoken(choice.model.family, &lang, &chunk.text),
                 text: chunk.text,
                 boundary: chunk.boundary,
                 lang,
