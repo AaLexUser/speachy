@@ -72,8 +72,10 @@ of audio), which is what the pill's bars draw, and its `words` for captions
 `captions.rs`). `word_playing` (`index`, `word`) is sent by the audio thread
 when playback reaches a word, so it follows speed, pause and resume. A
 `started` event carries the planned chunks, `spoken` included. `spoken` is
-made once, in `plan.rs`, and `plan`, `started` and the synthesizer all read
-that one value, so `plan` shows what the voice will be given.
+made once, in `plan.rs`, and `plan`, `started` and the synthesizer are all
+given that one value, so `plan` shows what the voice will be given. (Kokoro
+makes its English phonemes from the text itself; `spoken` is then the words
+behind them.)
 
 **Adding behaviour:** add a method to `Session`, a `Command` variant that
 calls it, and a test in `crates/speachy-core/tests/session.rs`. Expose it in

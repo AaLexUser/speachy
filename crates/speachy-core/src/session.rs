@@ -651,10 +651,8 @@ impl Session {
             .engines
             .engine(&first.engine)
             .map_err(|err| format!("{err:#}"))?;
-        // Planning is part of the first read too.
-        if let Some(model) = catalog::find(&first.model_id) {
-            plan::prepare(model);
-        }
+        // Planning is part of the first read too, whichever voice reads it.
+        plan::prepare(&self.installed());
         Ok(Some(first.model_id.clone()))
     }
 
