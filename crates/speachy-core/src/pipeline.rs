@@ -18,7 +18,7 @@
 
 use crate::audio::{AudioBackend, AudioStream, PlayEvent};
 use crate::captions::{self, Word};
-use crate::engine::{Audio, EngineProvider, Speech, SynthRequest};
+use crate::engine::{Audio, EngineProvider, SynthRequest};
 use crate::plan::PlannedChunk;
 use crate::text::Boundary;
 use serde::Serialize;
@@ -121,7 +121,7 @@ enum Msg {
     Loading,
     Synth {
         index: usize,
-        result: anyhow::Result<Option<Speech>>,
+        result: anyhow::Result<Option<Audio>>,
         synth_secs: f32,
     },
     Play(PlayEvent),
@@ -415,6 +415,7 @@ fn synthesis_worker(
         let started = Instant::now();
         let request = SynthRequest {
             text: &chunk.text,
+            spoken: chunk.spoken.as_deref(),
             sid: chunk.sid,
             lang: &chunk.lang,
         };
@@ -427,8 +428,8 @@ fn synthesis_worker(
         }
         // Count the audio as waiting before the session thread sees it, so
         // the next iteration cannot slip past the gate.
-        if let Ok(Some(speech)) = &result {
-            gate.add(speech.audio.seconds());
+        if let Ok(Some(audio)) = &result {
+            gate.add(audio.seconds());
         }
         let msg = Msg::Synth {
             index,
@@ -529,20 +530,19 @@ fn run_session(
                 synth_secs,
             } => {
                 let raw_secs = match &result {
-                    Ok(Some(speech)) => speech.audio.seconds(),
+                    Ok(Some(audio)) => audio.seconds(),
                     _ => 0.0,
                 };
-                let (audio, spoken) = match result {
-                    Ok(Some(speech)) => (trim_silence(speech.audio), speech.spoken),
+                let audio = match result {
+                    Ok(Some(audio)) => trim_silence(audio),
                     Ok(None) => continue,
                     Err(err) => {
                         log::warn!("chunk {index} failed: {err:#}");
                         failure.get_or_insert(format!("{err:#}"));
-                        let audio = Audio {
+                        Audio {
                             samples: Vec::new(),
                             sample_rate: 1,
-                        };
-                        (audio, None)
+                        }
                     }
                 };
                 if audio.samples.is_empty() {
@@ -562,7 +562,7 @@ fn run_session(
                 let chunk = &plan[index];
                 let words = captions::words(
                     &chunk.text,
-                    spoken.as_deref().unwrap_or(&chunk.text),
+                    chunk.spoken.as_deref().unwrap_or(&chunk.text),
                     &levels,
                 );
                 let marks = words

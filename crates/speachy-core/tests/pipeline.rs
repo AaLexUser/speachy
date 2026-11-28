@@ -3,7 +3,7 @@
 
 use speachy_core::audio::CaptureAudio;
 use speachy_core::captions::Word;
-use speachy_core::engine::{Audio, EngineKey, EngineProvider, Speech, SynthRequest, Synthesizer};
+use speachy_core::engine::{Audio, EngineKey, EngineProvider, SynthRequest, Synthesizer};
 use speachy_core::pipeline::{
     loudness_over_time, Outcome, SpeakOptions, Speaker, SpeechEvent, State, LEVEL_WINDOW,
 };
@@ -30,8 +30,8 @@ struct FakeEngine {
     loaded: AtomicBool,
 }
 
-/// What the fake reads for a text: "3,5 bn" in words, everything else as
-/// written.
+/// What a plan says the voice is given for a text: "3,5 bn" in words,
+/// everything else as written.
 fn spoken(text: &str) -> Option<String> {
     text.contains("3,5 bn")
         .then(|| text.replace("3,5 bn", "three and a half billion"))
@@ -46,7 +46,7 @@ impl Synthesizer for FakeEngine {
         &self,
         req: &SynthRequest,
         cancel: &Arc<AtomicBool>,
-    ) -> anyhow::Result<Option<Speech>> {
+    ) -> anyhow::Result<Option<Audio>> {
         let n: usize = req.text.rsplit('-').next().unwrap().parse().unwrap_or(0);
         self.calls
             .lock()
@@ -60,12 +60,9 @@ impl Synthesizer for FakeEngine {
         if req.text.starts_with("bad") {
             anyhow::bail!("cannot pronounce {}", req.text);
         }
-        Ok(Some(Speech {
-            audio: Audio {
-                samples: vec![level(n); (self.secs * RATE as f32) as usize],
-                sample_rate: RATE,
-            },
-            spoken: spoken(req.text),
+        Ok(Some(Audio {
+            samples: vec![level(n); (self.secs * RATE as f32) as usize],
+            sample_rate: RATE,
         }))
     }
 }
@@ -725,7 +722,9 @@ fn every_word_is_reported_once_in_order_within_its_chunk() {
 #[test]
 fn chunk_ready_carries_the_words_of_the_chunk() {
     let rig = rig(1.0, 0, f32::INFINITY);
-    let session = rig.speaker.speak(plan("Sold 3,5 bn coins", 1), opts(20.0));
+    let mut chunks = plan("Sold 3,5 bn coins", 1);
+    chunks[0].spoken = spoken(&chunks[0].text);
+    let session = rig.speaker.speak(chunks, opts(20.0));
     let events = rig.until_finished(session);
     let (words, audio_secs) = events
         .iter()
