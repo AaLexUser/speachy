@@ -11,6 +11,7 @@
 #      (бы́ло, ру́ку): the mark says which of the word's own vowels may be stressed.
 #   6. ё is written wherever it is said, also where the source printed е. With the marks taken out, and ё kept,
 #      a line is otherwise the sentence as it was printed: digits and abbreviations stay as they were.
+#      No sentence occurs twice (compared with the marks taken out).
 #   7. No Latin letters.
 #
 # Who placed the marks. An AI model placed them; no native speaker has checked this file. Where the dictionary
