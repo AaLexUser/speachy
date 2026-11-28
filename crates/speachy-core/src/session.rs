@@ -650,8 +650,12 @@ impl Session {
         self.inner
             .engines
             .engine(&first.engine)
-            .map(|_| Some(first.model_id.clone()))
-            .map_err(|err| format!("{err:#}"))
+            .map_err(|err| format!("{err:#}"))?;
+        // Planning is part of the first read too.
+        if let Some(model) = catalog::find(&first.model_id) {
+            plan::prepare(model);
+        }
+        Ok(Some(first.model_id.clone()))
     }
 
     /// Runs a command and returns its result as JSON. This is the one entry

@@ -60,6 +60,14 @@ fn spoken(family: Family, lang: &str, text: &str) -> Option<String> {
     (rewritten != text).then_some(rewritten)
 }
 
+/// Gets ready what [`plan`] needs to say what a voice of `model` is given, so
+/// that the first plan is as quick as the ones after it.
+pub fn prepare(model: &ModelInfo) {
+    if model.family == Family::Supertonic {
+        crate::stress::warm();
+    }
+}
+
 /// Plans how to speak `text` with the `installed` models.
 pub fn plan(
     text: &str,
