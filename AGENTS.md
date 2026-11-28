@@ -141,6 +141,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace          # or: -p speachy-core -p speachy-cli without the GUI libraries
 scripts/check-layers.sh
 python3 scripts/stress-eval.py marks   # Russian stress marks against the gold: a second, no models
+                                       # (`heard` and `compare` of that script are run by hand, see below)
 ```
 
 - `crates/speachy-core/tests/pipeline.rs` tests the pipeline with a fake
@@ -155,7 +156,8 @@ python3 scripts/stress-eval.py marks   # Russian stress marks against the gold: 
   (`scripts/make-caption-fixtures.py` makes them; it needs the models).
 - `crates/speachy-cli/tests/cli.rs` runs the built binary. Set
   `SPEACHY_TEST_MODELS` to a models directory with `supertonic-3` to also
-  run its tests that synthesize.
+  run its tests that synthesize; one of them checks that the `chunk_seconds` of
+  `speak --out --json`, which `heard` cuts the audio by, add up to the file.
 - None of these download models. To check real synthesis, install a model
   into a scratch `--home` and use `speak --no-audio` or `--out`.
 
@@ -167,13 +169,51 @@ from events, not from sleeps, and leave wide margins.
 `crates/speachy-core/tests/fixtures/stress-gold.txt` holds Russian sentences
 with the stress of every word marked; its header gives the rules and says who
 placed the marks and that no native speaker has checked them.
-`scripts/stress-eval.py` measures Speachy against it. Today it has one command, `marks`: exact, text against text, no
-model, standard library only, and it runs in CI. For every word of two or more
-vowels it says whether Speachy marked the gold vowel, marked another vowel,
-left the word to the voice, read it as another language, or rewrote it. A word
-marked on another vowel is an error in the stress table or in the gold; a
-person settles each and fixes it where it is. What the voice is *heard* to say
-is not measured yet.
+`scripts/stress-eval.py` measures Speachy against it, in two halves.
+
+`marks` is exact: text against text, no model, standard library only, and it
+runs in CI. For every word of two or more vowels it says whether Speachy marked
+the gold vowel, marked another vowel, left the word to the voice, read it as
+another language, or rewrote it. A word marked on another vowel is an error in
+the stress table or in the gold; a person settles each and fixes it where it is.
+
+`heard` is estimated, and is run by hand: it is not in CI. It has the built CLI
+read the gold as one document (`speak --out`, language detection on, one
+process per reading, two readings), and a Russian phoneme recognizer says which
+vowel of each word carried the stress. The report is how often a word was heard
+off its gold vowel, per class of `marks`, with a 95 % range from resampling
+sentences. It stops if the binary does not give the voice what
+`stress-spoken.txt` says, so build the CLI from the checkout first. It refuses a
+speed other than 1.0. Runs are saved in `target/stress-eval/NAME.json`, with the
+audio beside them:
+
+```sh
+cargo build -p speachy-cli
+uv run scripts/stress-eval.py heard mine --home DIR    # about 17 minutes; DIR has supertonic-3
+uv run scripts/stress-eval.py compare main mine        # after the same on a build of main
+```
+
+`heard` downloads the recognizer, `omogr/wav2vec2-lv-60-ru-ipa` at the revision
+pinned in the script (1.26 GB, once, to the Hugging Face cache), and installs
+the Python packages pinned at the top of the script (`uv run` does; torch alone
+is a few hundred MB). Its licence is CC BY-NC-SA 4.0, so nothing of it may enter
+this repository, the app or a release: it is a development tool, fetched when
+`heard` runs. Its weights are a pickle and are read with
+`torch.load(weights_only=True)`; keep it that way.
+
+What the numbers mean. A word "heard off the gold vowel" is not a word stressed
+wrongly: the same recognizer hears people off the gold vowel in 1.9 % of words,
+and it misses about one wrong stress in five on other voices. The share is a
+rate over many words, not a verdict on one, and two readings of one text differ
+on a few words in a hundred. Judge a change with `compare`, not by eye: it pairs
+two runs word by word, refuses runs with another voice, model, speed or
+recognizer revision, and prints three lines. "Words Speachy marks differently"
+is where a change can show; "words Speachy marks the same" is the control, and
+should say "within noise". It is a control for noise, not a proof: those words
+share chunks with words whose marks did change, so once in a while it says
+"real" (it did, by 4.7 points, between a build and one that marks nothing). "Real" means the 95 % range of the difference excludes
+zero. A change of under about 1.5 points overall, or about 9 points in a group
+of 100 words, cannot be seen this way; `marks` shows it exactly.
 
 The script reads `tests/fixtures/stress-spoken.txt`, which is what the engine
 gives the voice for the gold read as one document. `tests/stress.rs` fails
