@@ -4,9 +4,11 @@
 use serde_json::{json, Value};
 use speachy_core::audio::CaptureAudio;
 use speachy_core::captions::Word;
-use speachy_core::engine::{Audio, EngineKey, EngineProvider, Speech, SynthRequest, Synthesizer};
+use speachy_core::engine::{Audio, EngineKey, EngineProvider, SynthRequest, Synthesizer};
 use speachy_core::pipeline::{Outcome, SpeechEvent};
+use speachy_core::plan::PlannedChunk;
 use speachy_core::session::{Command, Event, Paths, Session};
+use speachy_core::text::Boundary;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{channel, Receiver};
 use std::sync::{Arc, Mutex};
@@ -17,23 +19,22 @@ use std::time::Duration;
 #[derive(Default)]
 struct FakeEngines {
     requests: Mutex<Vec<(String, String, i32)>>, // (text, lang, sid)
+    /// The `spoken` of every request.
+    spoken: Mutex<Vec<Option<String>>>,
     unloaded: Mutex<Vec<String>>,
 }
 
 impl Synthesizer for FakeEngines {
-    fn synthesize(
-        &self,
-        req: &SynthRequest,
-        _: &Arc<AtomicBool>,
-    ) -> anyhow::Result<Option<Speech>> {
+    fn synthesize(&self, req: &SynthRequest, _: &Arc<AtomicBool>) -> anyhow::Result<Option<Audio>> {
         let request = (req.text.to_string(), req.lang.to_string(), req.sid);
         self.requests.lock().unwrap().push(request);
-        Ok(Some(Speech {
-            audio: Audio {
-                samples: vec![0.1; req.text.len() * 10],
-                sample_rate: 1000,
-            },
-            spoken: None,
+        self.spoken
+            .lock()
+            .unwrap()
+            .push(req.spoken.map(str::to_string));
+        Ok(Some(Audio {
+            samples: vec![0.1; req.text.len() * 10],
+            sample_rate: 1000,
         }))
     }
 }
@@ -186,6 +187,55 @@ fn plan_shows_chunks_languages_and_voices_without_speaking() {
 }
 
 #[test]
+fn a_plan_says_what_the_voice_is_given() {
+    let rig = rig(&["supertonic-3", "kokoro-v1.0"]);
+
+    // Russian read by Supertonic 3: numbers in words, stressed vowels marked.
+    let plan = rig
+        .run(json!({ "cmd": "plan", "text": "Вода стоит 15 рублей.", "lang": "ru" }))
+        .unwrap();
+    let chunk = &plan["chunks"][0];
+    assert_eq!(chunk["text"], "Вода стоит 15 рублей.");
+    assert_eq!(
+        chunk["spoken"],
+        "Вода\u{301} стоит пятна\u{301}дцать рубле\u{301}й."
+    );
+
+    // English read by Kokoro: digits in words.
+    let plan = rig
+        .run(json!({
+            "cmd": "plan", "text": "Take 3 apples.", "lang": "en",
+            "voice": { "model_id": "kokoro-v1.0", "voice_id": "bm_george" },
+        }))
+        .unwrap();
+    assert_eq!(plan["chunks"][0]["spoken"], "Take three apples.");
+
+    // Text that needs no rewriting has no spoken form.
+    let plain = rig
+        .run(json!({
+            "cmd": "plan", "text": "Take some apples.", "lang": "en",
+            "voice": { "model_id": "kokoro-v1.0", "voice_id": "bm_george" },
+        }))
+        .unwrap();
+    assert!(plain["chunks"][0].get("spoken").is_none());
+
+    // Speaking hands the synthesizer the string the plan returned.
+    rig.run(json!({ "cmd": "speak", "text": "Вода стоит 15 рублей.", "lang": "ru" }))
+        .unwrap();
+    rig.run(json!({ "cmd": "wait" })).unwrap();
+    assert_eq!(
+        *rig.engines.spoken.lock().unwrap(),
+        [Some(chunk["spoken"].as_str().unwrap().to_string())]
+    );
+
+    // A language no rewriting exists for.
+    let german = rig
+        .run(json!({ "cmd": "plan", "text": "Das sind 3 Äpfel.", "lang": "de" }))
+        .unwrap();
+    assert!(german["chunks"][0].get("spoken").is_none());
+}
+
+#[test]
 fn settings_updates_persist_and_are_announced() {
     let rig = rig(&["supertonic-3"]);
     let result = rig
@@ -300,6 +350,40 @@ fn commands_and_events_have_a_stable_json_shape() {
     );
     let event = serde_json::to_value(Event::Notice("hello".into())).unwrap();
     assert_eq!(event, json!({ "event": "notice", "data": "hello" }));
+    let chunk = |text: &str, spoken: Option<&str>| PlannedChunk {
+        text: text.into(),
+        spoken: spoken.map(Into::into),
+        boundary: Boundary::End,
+        lang: "en".into(),
+        engine: EngineKey {
+            model_id: "m".into(),
+            variant: None,
+        },
+        sid: 0,
+        model_id: "m".into(),
+        voice_id: "v".into(),
+    };
+    let event = serde_json::to_value(Event::Speech(SpeechEvent::Started {
+        session: 3,
+        chunks: vec![
+            chunk("Take 3.", Some("Take three.")),
+            chunk("Take it.", None),
+        ],
+    }))
+    .unwrap();
+    let shape = |text: &str| {
+        json!({ "text": text, "boundary": "end", "lang": "en",
+            "engine": { "model_id": "m", "variant": null },
+            "sid": 0, "model_id": "m", "voice_id": "v" })
+    };
+    let mut with_spoken = shape("Take 3.");
+    with_spoken["spoken"] = json!("Take three.");
+    assert_eq!(
+        event,
+        json!({ "event": "speech", "data": {
+            "type": "started", "session": 3, "chunks": [with_spoken, shape("Take it.")],
+        } })
+    );
     let event = serde_json::to_value(Event::Speech(SpeechEvent::ChunkPlaying {
         session: 3,
         index: 1,

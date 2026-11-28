@@ -136,6 +136,12 @@ fn lowercase_byte(c: char) -> Option<u8> {
     }
 }
 
+/// Reads the table into memory now. The first [`mark`] does it otherwise,
+/// and takes about half a second longer for it.
+pub fn warm() {
+    table();
+}
+
 /// Puts an accent after the stressed vowel of each Russian word whose stress
 /// is known, so the voice stresses it there, and writes ё where a word
 /// printed with е can only be read with ё.

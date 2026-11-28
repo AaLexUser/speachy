@@ -157,6 +157,8 @@ written out as words, in the case the surrounding words call for
 marked so the voice stresses it there, and "ё" is put back where the text
 prints "е" for it, as most Russian text does (`stress.rs`). Words that can be
 read two ways, such as "замок" or "все", are left as written.
+`speachy-cli plan` shows the result under each chunk it changes, so you can
+see what the voice was given when a word is misread.
 
 ## Engine and interface
 
@@ -189,7 +191,7 @@ cargo build --release -p speachy-cli      # target/release/speachy-cli
 
 speachy-cli models                         # what can be installed, what is
 speachy-cli install supertonic-3
-speachy-cli plan "Hello. Привет, как дела?"   # chunks, language and voice of each
+speachy-cli plan "Hello. Привет, как дела?"   # chunks, language and voice of each, and the words the voice is given
 speachy-cli speak "Hello from Speachy."
 speachy-cli speak --voice M2 --out hello.wav "Hello."
 speachy-cli run '{"cmd":"snapshot"}'       # any engine command, as the app sends it

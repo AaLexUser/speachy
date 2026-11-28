@@ -28,27 +28,22 @@ impl Audio {
 
 #[derive(Debug, Clone)]
 pub struct SynthRequest<'a> {
+    /// The chunk as written. Kokoro makes English phonemes from this.
     pub text: &'a str,
+    /// The chunk as the voice is to be given it (`PlannedChunk::spoken`).
+    /// Models that read text read this when it is set.
+    pub spoken: Option<&'a str>,
     /// Speaker id within the model.
     pub sid: i32,
     /// ISO 639-1 language of `text`.
     pub lang: &'a str,
 }
 
-/// What a synthesizer makes of a chunk.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Speech {
-    pub audio: Audio,
-    /// The chunk as it was read: numbers, units and abbreviations in words.
-    /// `None` when the model read the text as written.
-    pub spoken: Option<String>,
-}
-
 /// Something that can turn text into audio. Implemented by [`SherpaEngine`];
 /// tests substitute a fake.
 pub trait Synthesizer: Send + Sync {
     /// Returns `None` if `cancel` was raised before the audio was complete.
-    fn synthesize(&self, req: &SynthRequest, cancel: &Arc<AtomicBool>) -> Result<Option<Speech>>;
+    fn synthesize(&self, req: &SynthRequest, cancel: &Arc<AtomicBool>) -> Result<Option<Audio>>;
 }
 
 /// Identifies a loaded engine: a model plus the voice variant it was loaded
@@ -277,7 +272,7 @@ impl SherpaEngine {
 }
 
 impl Synthesizer for SherpaEngine {
-    fn synthesize(&self, req: &SynthRequest, cancel: &Arc<AtomicBool>) -> Result<Option<Speech>> {
+    fn synthesize(&self, req: &SynthRequest, cancel: &Arc<AtomicBool>) -> Result<Option<Audio>> {
         if req.text.contains('\0') {
             bail!("text contains a NUL character");
         }
@@ -285,40 +280,22 @@ impl Synthesizer for SherpaEngine {
         if self.family == Family::Supertonic {
             extra.insert("lang".to_string(), serde_json::json!(req.lang));
         }
-        let mut text = req.text;
+        let mut text = req.spoken.unwrap_or(req.text);
         let mut phonemes = None;
-        let mut spoken = None;
-        match (self.family, &self.phonemizer) {
-            // Kokoro reads English from phonemes (see `crate::english`).
-            (Family::Kokoro, Some(phonemizer)) if req.lang == "en" => {
-                let sentences = phonemizer.phonemize(req.text);
-                if sentences.is_empty() {
-                    return Ok(Some(Speech {
-                        audio: Audio {
-                            samples: Vec::new(),
-                            sample_rate: self.sample_rate().max(1),
-                        },
-                        spoken: None,
-                    }));
-                }
-                phonemes = Some(sentences);
-                text = "";
-                // The words behind the phonemes, as near as they can be told.
-                spoken = Some(crate::numbers::spell_out_english(req.text));
+        // Kokoro reads English from phonemes (see `crate::english`).
+        if let (Family::Kokoro, Some(phonemizer), "en") = (self.family, &self.phonemizer, req.lang)
+        {
+            let sentences = phonemizer.phonemize(req.text);
+            if sentences.is_empty() {
+                // Nothing to pronounce. The chunk has a spoken text all the
+                // same, so it has words and no audio; it is skipped.
+                return Ok(Some(Audio {
+                    samples: Vec::new(),
+                    sample_rate: self.sample_rate().max(1),
+                }));
             }
-            // KittenTTS looks words up in a lexicon, which has no digits.
-            (Family::Kitten, _) if req.lang == "en" => {
-                spoken = Some(crate::numbers::spell_out_english(req.text));
-            }
-            // Supertonic misreads Russian numbers, units and abbreviations,
-            // and sometimes stresses the wrong vowel.
-            (Family::Supertonic, _) if req.lang == "ru" => {
-                spoken = Some(crate::stress::mark(&crate::russian::spell_out(req.text)));
-            }
-            _ => {}
-        }
-        if let (Some(read), None) = (&spoken, &phonemes) {
-            text = read.as_str();
+            phonemes = Some(sentences);
+            text = "";
         }
         let mut config = GenerationConfig {
             sid: req.sid,
@@ -359,12 +336,9 @@ impl Synthesizer for SherpaEngine {
             }
             Family::Supertonic | Family::Kokoro => {}
         }
-        Ok(Some(Speech {
-            audio: Audio {
-                samples,
-                sample_rate,
-            },
-            spoken,
+        Ok(Some(Audio {
+            samples,
+            sample_rate,
         }))
     }
 }

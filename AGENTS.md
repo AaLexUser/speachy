@@ -56,7 +56,7 @@ commands, as `{"cmd": "<name>", …}`:
 | `change_speed` | `by` (for example `0.1` or `-0.1`) | `{"speed": 1.1}`; also while speaking, heard at once |
 | `reset_speed` | | `{"speed": 1.0}`; at 1.0, back to the speed before the last reset |
 | `speak` | `text`, `voice` (`{model_id, voice_id}`), `lang` | `{"session": n}` |
-| `plan` | same as `speak` | `{"chunks": […]}`; nothing is synthesized |
+| `plan` | same as `speak` | `{"chunks": […]}`, each with the text and, as `spoken`, the words the voice is given when they differ from it; nothing is synthesized |
 | `detect_language` | `text` | `{"language", "name", "reliable"}` |
 | `stop` | | `{"stopped": bool}` |
 | `pause`, `resume`, `toggle_pause` | | `{}` |
@@ -70,7 +70,12 @@ chunk's loudness over time (`levels`, one value from 0 to 100 for every 40 ms
 of audio), which is what the pill's bars draw, and its `words` for captions
 (`text` as written, `start_secs` at natural pace, `line`; see
 `captions.rs`). `word_playing` (`index`, `word`) is sent by the audio thread
-when playback reaches a word, so it follows speed, pause and resume.
+when playback reaches a word, so it follows speed, pause and resume. A
+`started` event carries the planned chunks, `spoken` included. `spoken` is
+made once, in `plan.rs`, and `plan`, `started` and the synthesizer are all
+given that one value, so `plan` shows what the voice will be given. (Kokoro
+makes its English phonemes from the text itself; `spoken` is then the words
+behind them.)
 
 **Adding behaviour:** add a method to `Session`, a `Command` variant that
 calls it, and a test in `crates/speachy-core/tests/session.rs`. Expose it in
@@ -87,7 +92,7 @@ speachy-cli --help                    # every subcommand explains itself
 speachy-cli models                    # what can be installed, what is
 speachy-cli install supertonic-3      # download a model (about 130 MB)
 speachy-cli voices
-speachy-cli plan "Hello. Привет, как дела?"      # chunks, language and voice per chunk
+speachy-cli plan "Hello. Привет, как дела?"      # chunks, language and voice per chunk, and what the voice is given where that differs
 speachy-cli detect "Dies ist ein Test."
 speachy-cli speak --no-audio "Timing only."       # synthesize, discard the audio
 speachy-cli speak --out out.wav "Keep the audio." # write a WAV instead of playing

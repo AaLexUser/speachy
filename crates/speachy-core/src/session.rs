@@ -650,8 +650,10 @@ impl Session {
         self.inner
             .engines
             .engine(&first.engine)
-            .map(|_| Some(first.model_id.clone()))
-            .map_err(|err| format!("{err:#}"))
+            .map_err(|err| format!("{err:#}"))?;
+        // Planning is part of the first read too, whichever voice reads it.
+        plan::prepare(&self.installed());
+        Ok(Some(first.model_id.clone()))
     }
 
     /// Runs a command and returns its result as JSON. This is the one entry

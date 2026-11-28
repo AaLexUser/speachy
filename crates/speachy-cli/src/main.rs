@@ -434,6 +434,9 @@ fn run_command(
                         c["boundary"].as_str().unwrap_or_default(),
                         c["text"].as_str().unwrap_or_default(),
                     );
+                    if let Some(spoken) = c["spoken"].as_str() {
+                        println!("     →  {spoken}");
+                    }
                 }
             }
         }
