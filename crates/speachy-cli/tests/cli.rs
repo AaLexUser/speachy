@@ -281,3 +281,36 @@ fn speaking_reports_every_word_as_it_is_read() {
         .collect();
     assert_eq!(played, (0..8).map(|w| (0, w)).collect::<Vec<_>>());
 }
+
+#[cfg(unix)]
+#[test]
+fn plan_shows_what_the_voice_is_given_under_its_chunk() {
+    let Some(home) = home_with_models() else {
+        eprintln!("SPEACHY_TEST_MODELS is not set: no model to plan with");
+        return;
+    };
+    let text = "Вода стоит 15 рублей.";
+    let output = cli(home.path(), &["plan", "--lang", "ru", text], None);
+    assert!(output.status.success(), "{}", stdout(&output));
+    let lines: Vec<String> = stdout(&output).lines().map(str::to_string).collect();
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(lines[0].ends_with(text), "{}", lines[0]);
+    assert!(
+        lines[1].ends_with("Вода\u{301} стоит пятна\u{301}дцать рубле\u{301}й."),
+        "{}",
+        lines[1]
+    );
+
+    let output = cli(home.path(), &["plan", "--json", "--lang", "ru", text], None);
+    let chunks = json(&output);
+    assert_eq!(chunks[0]["text"], text);
+    assert_eq!(
+        chunks[0]["spoken"],
+        "Вода\u{301} стоит пятна\u{301}дцать рубле\u{301}й."
+    );
+
+    // Nothing is printed under a chunk the voice reads as written.
+    let output = cli(home.path(), &["plan", "--lang", "en", "Hello there."], None);
+    assert!(output.status.success(), "{}", stdout(&output));
+    assert_eq!(stdout(&output).lines().count(), 1);
+}
