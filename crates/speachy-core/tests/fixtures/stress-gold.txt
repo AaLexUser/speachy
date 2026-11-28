@@ -23,9 +23,9 @@
 # A sentence with a name or a word whose stress could not be established with confidence was left out.
 #
 # Sources:
-#   lines 1-108     FLEURS, Russian, dev split (Conneau et al., 2022), CC BY 4.0. The wording is the corpus's,
+#   the first 108   FLEURS, Russian, dev split (Conneau et al., 2022), CC BY 4.0. The wording is the corpus's,
 #                   mistakes included; only ё was restored.
-#   lines 109-166   written for Speachy in the style of the articles its users select: news, science,
+#   the other 58    written for Speachy in the style of the articles its users select: news, science,
 #                   technology, economics, culture; some with numbers, units and abbreviations.
 #   The dictionary: RUAccent (MIT), the same one Speachy's stress table is built from.
 
