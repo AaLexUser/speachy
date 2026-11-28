@@ -745,16 +745,32 @@ def default_cli() -> pathlib.Path:
     return max(built, key=lambda p: p.stat().st_mtime)
 
 
-def cli_args(cli: pathlib.Path, home: str | None, *rest: str) -> list[str]:
-    return [str(cli), *(["--home", home] if home else []), *rest]
+def ask(cli: pathlib.Path, home: str | None, *rest: str, text: str = "") -> str:
+    """What one command of the CLI prints, given `text` on standard input. Stops when it cannot be run or fails."""
+    try:
+        done = subprocess.run([str(cli), *(["--home", home] if home else []), *rest], input=text.encode(),
+                              capture_output=True)
+    except OSError as err:
+        raise SystemExit(f"cannot run {cli}: {err}") from None
+    if done.returncode:
+        raise SystemExit(f"{cli} failed: {done.stderr.decode(errors='replace').strip()[-2000:]}")
+    return done.stdout.decode(errors="replace")
+
+
+def answer(cli: pathlib.Path, home: str | None, *rest: str, text: str = ""):
+    """The JSON one command of the CLI prints."""
+    try:
+        return json.loads(ask(cli, home, *rest, text=text))
+    except ValueError:
+        raise SystemExit(f"{cli} did not answer with JSON: is it a speachy-cli?") from None
 
 
 def check_speed(cli: pathlib.Path, home: str | None) -> None:
     """The recognizer was calibrated on speech at its natural pace."""
-    done = subprocess.run(cli_args(cli, home, "run", '{"cmd":"snapshot"}'), capture_output=True, text=True)
-    if done.returncode:
-        raise SystemExit(f"{cli} could not give its settings: {done.stderr.strip()}")
-    speed = json.loads(done.stdout)["settings"]["speed"]
+    try:
+        speed = answer(cli, home, "run", '{"cmd":"snapshot"}')["settings"]["speed"]
+    except (KeyError, TypeError):
+        raise SystemExit(f"{cli} did not give its settings: is it a speachy-cli?") from None
     if speed != 1.0:
         raise SystemExit(f"The settings of this home have speed {round(speed, 3)}. "
                          "Measure at 1.0: speachy-cli settings speed=1.0")
@@ -776,7 +792,10 @@ def expected_lines(spoken_text: str) -> list[str]:
 
 def given_lines(chunks: list[dict]) -> list[str]:
     """The chunks as lines of stress-spoken.txt show them."""
-    return [("" if c["lang"] == "ru" else f"[{c['lang']}] ") + (c.get("spoken") or c["text"]) for c in chunks]
+    try:
+        return [("" if c["lang"] == "ru" else f"[{c['lang']}] ") + (c.get("spoken") or c["text"]) for c in chunks]
+    except (KeyError, TypeError, AttributeError):
+        raise SystemExit("The CLI did not list its chunks as this checkout's does: build it from this checkout.") from None
 
 
 def check_given(cli: pathlib.Path, chunks: list[dict], spoken_text: str) -> None:
@@ -792,33 +811,31 @@ def check_given(cli: pathlib.Path, chunks: list[dict], spoken_text: str) -> None
             f"Build the CLI from this checkout (cargo build -p speachy-cli), or accept the change: {BLESS}")
 
 
+def voice_args(voice: str | None) -> list[str]:
+    return ["--voice", voice] if voice else []
+
+
 def read_aloud(cli: pathlib.Path, home: str | None, voice: str | None, text: str, spoken_text: str,
                wav: pathlib.Path) -> Reading:
     """`speachy-cli --json speak [--voice V] --out WAV -` with the document on standard input: one process, one model
     load, language detection on, the text chunked as an article is. Stops when the chunks the voice was given are not
-    the lines of stress-spoken.txt (this binary is not the code of this checkout), or when `chunk_seconds` does not
-    add up to the file."""
-    planned = subprocess.run(cli_args(cli, home, "--json", "plan", "-"), input=text.encode(), capture_output=True)
-    if planned.returncode:
-        raise SystemExit(f"{cli} could not plan the document: {planned.stderr.decode(errors='replace').strip()}")
-    check_given(cli, json.loads(planned.stdout), spoken_text)    # in seconds, before minutes of speech
-    command = cli_args(cli, home, "--json", "speak", *(["--voice", voice] if voice else []), "--out", str(wav), "-")
+    the lines of stress-spoken.txt, or when `chunk_seconds` does not add up to the file."""
     began = datetime.datetime.now()
-    done = subprocess.run(command, input=text.encode(), capture_output=True)
+    printed = ask(cli, home, "--json", "speak", *voice_args(voice), "--out", str(wav), "-", text=text)
     seconds = (datetime.datetime.now() - began).total_seconds()
-    if done.returncode:
-        raise SystemExit(f"{cli} failed: {done.stderr.decode(errors='replace').strip()[-2000:]}")
-    events = [json.loads(line) for line in done.stdout.decode().split("\n") if line.startswith("{")]
-    started = next((e["data"] for e in events if e.get("data", {}).get("type") == "started"), None)
-    summary = next((e for e in events if "file" in e), None)
-    if started is None or summary is None:
-        raise SystemExit(f"{cli} said neither `started` nor where it wrote the audio; is it older than this checkout?")
-    check_given(cli, started["chunks"], spoken_text)
-    chunk_seconds = summary.get("chunk_seconds")
-    if not chunk_seconds or len(chunk_seconds) != len(started["chunks"]):
-        raise SystemExit(f"{cli}: `chunk_seconds` has {len(chunk_seconds or [])} values for {len(started['chunks'])} "
-                         "chunks. Build the CLI from this checkout; a chunk that was not played cannot be measured.")
-    return Reading(started["chunks"], wav, summary["sample_rate"], chunk_seconds, seconds)
+    try:
+        events = [json.loads(line) for line in printed.split("\n") if line.startswith("{")]
+        started = next(e["data"] for e in events if e.get("data", {}).get("type") == "started")
+        summary = next(e for e in events if "file" in e)
+        chunks, rate, chunk_seconds = started["chunks"], summary["sample_rate"], summary["chunk_seconds"]
+    except (ValueError, KeyError, TypeError, AttributeError, StopIteration):
+        raise SystemExit(f"{cli} did not say what it read or where each chunk is in the audio: build it from this "
+                         "checkout.") from None
+    check_given(cli, chunks, spoken_text)
+    if len(chunk_seconds) != len(chunks):
+        raise SystemExit(f"{cli}: `chunk_seconds` has {len(chunk_seconds)} values for {len(chunks)} chunks. A chunk "
+                         "that was not played cannot be measured.")
+    return Reading(chunks, wav, rate, chunk_seconds, seconds)
 
 
 def cut(reading: Reading) -> list:
@@ -906,9 +923,15 @@ class Run:
         path = pathlib.Path(name) if name.endswith(".json") or "/" in name else RUNS / f"{name}.json"
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-            return Run(**{**data, "rows": [Row(**r) for r in data["rows"]]})
+            run = Run(**{**data, "rows": [Row(**r) for r in data["rows"]]})
+            for r in run.rows:
+                if not (isinstance(r.heard, list) and len(r.heard) == run.readings > 0
+                        and all(type(h) is int for h in r.heard) and 0 <= r.chunk < len(run.given)):
+                    raise ValueError(f"the word {r.word!r} does not fit the run's readings or chunks")
+            return run
         except (OSError, ValueError, TypeError, KeyError) as err:
-            raise SystemExit(f"cannot read the run {path}: {err}") from None
+            raise SystemExit(f"cannot read the run {path}: {err}\n"
+                             "If an older version of this script saved it, make the run again.") from None
 
 
 # ---- numbers ----------------------------------------------------------------------------------------------------------
@@ -936,8 +959,8 @@ def share(sentences: list[list[int]]) -> float | None:
 # ---- the heard report --------------------------------------------------------------------------------------------------
 
 PEOPLE = ("The same recognizer hears people reading Russian off the gold vowel in 45 of 2,388 words (1.9 %, FLEURS "
-          "recordings,\n  measured once with the prototype of this instrument), and it misses about one wrong stress in "
-          "five on other voices.")
+          "recordings,\n  measured once with the prototype of this instrument). On another voice (Piper) it missed one "
+          "wrong stress in five;\n  how many it misses on this voice is not known.")
 
 
 def rate_line(label: str, rows: list[Row], indent: int = 2) -> str:
@@ -969,8 +992,8 @@ def heard_report(run: Run) -> str:
            f"{len(run.unaligned)} of {len(run.given) * run.readings} chunk readings could not be aligned: their words "
            "count as heard off"),
         "",
-        f"  {'':27}{'word':>8}{'heard off the':>14}",
-        f"  {'':27}{'readings':>8}{'words':>7}{'share':>10}   95 % range",
+        f"  {'':27}{'word':>8}{'heard':>7}",
+        f"  {'':27}{'readings':>8}{'off':>7}{'share':>10}   95 % range",
         rate_line("all words", run.rows),
     ]
     for cls in SCORED:
@@ -999,7 +1022,7 @@ def signed(x: float) -> str:
     return f"{x:+.1f}"
 
 
-def compare_line(label: str, pairs: list[tuple[Row, Row]]) -> str:
+def compare_line(label: str, pairs: list[tuple[Row, Row]], width: int) -> str:
     """Heard-off share in each run for the same words, the difference in points, and its 95 % range from drawing
     sentences again in both runs together."""
     if not pairs:
@@ -1018,7 +1041,7 @@ def compare_line(label: str, pairs: list[tuple[Row, Row]]) -> str:
         return 100 * (ob / nb - oa / na) if na and nb else None
 
     before, after = (100 * sum(s[i] for s in sums) / sum(s[i + 1] for s in sums) for i in (0, 2))
-    head = f"  {label:48}{len(pairs):>6}{before:>9.1f} %{after:>8.1f} %{signed(change(sums)):>8}"
+    head = f"  {label:48}{len(pairs):>6}{before:>{width - 2}.1f} %{after:>{width - 2}.1f} %{signed(change(sums)):>8}"
     if min(sum(s[1] for s in sums), sum(s[3] for s in sums)) < FEW:
         return head + "   (too few words for a range)"
     low, high = resampled(sums, change)
@@ -1036,23 +1059,25 @@ def compare_report(a: Run, b: Run) -> str:
     changed = [p for p in pairs if a.given[p[0].chunk] != b.given[p[1].chunk]]
     different = [p for p in changed if (p[0].cls, p[0].given) != (p[1].cls, p[1].given)]
     beside = [p for p in changed if (p[0].cls, p[0].given) == (p[1].cls, p[1].given)]
-    only = len(a.rows) + len(b.rows) - 2 * len(pairs)
+    apart = len(mine.keys() | {(r.sentence, r.index) for r in b.rows}) - len(pairs)
+    width = max(len(a.name), len(b.name), 7) + 2
     out = [
         f"Stress heard: {b.name} ({b.commit}) against {a.name} ({a.commit})",
         f"  voice {a.voice}, recognizer {a.recognizer.replace(REVISION, REVISION[:7])}, {a.readings} readings of "
         f"{a.name} and {b.readings} of {b.name}, {count(len(pairs), 'word', 'words')} in both"
-        + (f" ({only} not compared: in one run only, or the gold changed)" if only else ""),
+        + (f" ({apart} not compared: in one run only, or the gold changed)" if apart else ""),
         "",
         f"  {'':48}{'':>6}{'heard off the gold vowel':>21}",
-        f"  {'':48}{'words':>6}{a.name:>11}{b.name:>10}   change, in points, with its 95 % range",
-        compare_line("all words", pairs),
-        compare_line("words Speachy marks differently", different),
-        compare_line("words marked the same, in a chunk that changed", beside),
-        compare_line("words in chunks that did not change", unchanged),
+        f"  {'':48}{'words':>6}{a.name:>{width}}{b.name:>{width}}   change, in points, with its 95 % range",
+        compare_line("all words", pairs, width),
+        compare_line("words Speachy marks differently", different, width),
+        compare_line("words marked the same, in a chunk that changed", beside, width),
+        compare_line("words in chunks that did not change", unchanged, width),
         "",
         "  The last line is the control. The voice was given those chunks letter for letter the same in both runs, so",
         "  the line shows how much two runs differ when nothing changed. A line is real when its range does not reach",
-        "  zero; one range in twenty does that by chance.",
+        "  zero; one range in twenty does that by chance. When nearly every chunk changed the control has too few",
+        "  words to say anything: read the same build twice and compare those two runs.",
     ]
     return "\n".join(out)
 
@@ -1124,13 +1149,16 @@ def git_state() -> str:
 
 
 def heard(name: str, cli: str | None, home: str | None, voice: str | None, readings: int) -> int:
-    if not re.fullmatch(r"[A-Za-z0-9._-]+", name):
-        raise SystemExit(f"{name!r} is not a name for a run: use letters, digits, . _ and -.")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name):
+        raise SystemExit(f"{name!r} is not a name for a run: start with a letter or digit, then letters, digits, . _ -")
     if readings < 1:
         raise SystemExit("--readings must be at least 1.")
     gold, spoken_text, paired = load_checked()
     binary = pathlib.Path(cli) if cli else default_cli()
     check_speed(binary, home)
+    text = document(gold)
+    # in seconds, before the recognizer is loaded and minutes of speech
+    check_given(binary, answer(binary, home, "--json", "plan", *voice_args(voice), "-", text=text), spoken_text)
     try:
         listener = Listener()
     except ImportError as err:
@@ -1141,11 +1169,11 @@ def heard(name: str, cli: str | None, home: str | None, voice: str | None, readi
     reads = []
     for r in range(readings):
         print(f"{binary}: reading {r + 1} of {readings}", file=sys.stderr)
-        reads.append(read_aloud(binary, home, voice, document(gold), spoken_text, out / f"reading-{r + 1}.wav"))
+        reads.append(read_aloud(binary, home, voice, text, spoken_text, out / f"reading-{r + 1}.wav"))
         print(f"  spoken in {reads[-1].seconds:.0f} s", file=sys.stderr)
     rows, unaligned = listen(reads, paired, listener)
     chunks = reads[0].chunks
-    version = subprocess.run([str(binary), "--version"], capture_output=True, text=True).stdout.strip()
+    version = ask(binary, None, "--version").strip()
     run = Run(
         name, datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC"), version, git_state(),
         ",".join(sorted({c["model_id"] for c in chunks})), ",".join(sorted({f"{c['model_id']}/{c['voice_id']}" for c in chunks})),

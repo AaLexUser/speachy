@@ -203,7 +203,8 @@ this repository, the app or a release: it is a development tool, fetched when
 
 What the numbers mean. A word "heard off the gold vowel" is not a word stressed
 wrongly: the same recognizer hears people off the gold vowel in 1.9 % of words,
-and it misses about one wrong stress in five on other voices. The share is a
+and on another voice (Piper) it missed one wrong stress in five; how many it
+misses on Supertonic is not known. The share is a
 rate over many words, not a verdict on one, and two readings of one text differ
 on a few words in a hundred.
 
@@ -213,10 +214,13 @@ lines: all words, the words Speachy marks differently, the words marked the same
 in a chunk that changed, and the words in chunks that did not change. The last
 is the control: the voice was given those chunks letter for letter the same in
 both runs, so its line shows what two runs look like when nothing changed, and
-it should say "within noise". "Real" means the 95 % range of the difference
-excludes zero; one range in twenty does that by chance. Two runs of one build
-differed by 0.1 points over all 1,817 words, with a range of 0.5 points either
-way, so a smaller change overall cannot be seen this way, and in a group of
+it should say "within noise". When a change touches nearly every chunk the
+control has too few words to say anything; read the same build twice and
+compare those two runs instead. "Real" means the 95 % range of the difference
+excludes zero; one range in twenty does that by chance. Runs of one build
+differed by 0.1 and by 0.4 points over all 1,817 words, with a range of 0.5
+points either way, so a change of under about half a point overall cannot be
+seen this way, and in a group of
 about 120 words the range is 5 points either way; `marks` shows such a change
 exactly. A group of fewer than 100 word readings gets no range.
 

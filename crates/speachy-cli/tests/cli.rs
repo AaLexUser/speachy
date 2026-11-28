@@ -341,10 +341,12 @@ fn speak_out_says_where_each_chunk_is_in_the_file() {
         .lines()
         .filter_map(|l| serde_json::from_str(l).ok())
         .collect();
-    let ready = lines
+    // The speech of each chunk, from its loudness: one value for every 40 ms.
+    let speech: Vec<f64> = lines
         .iter()
         .filter(|l| l["data"]["type"] == "chunk_ready")
-        .count();
+        .map(|l| l["data"]["levels"].as_array().unwrap().len() as f64 * 0.04)
+        .collect();
     let summary = lines.iter().find(|l| l.get("file").is_some()).unwrap();
     let chunks: Vec<f64> = summary["chunk_seconds"]
         .as_array()
@@ -352,8 +354,17 @@ fn speak_out_says_where_each_chunk_is_in_the_file() {
         .iter()
         .map(|s| s.as_f64().unwrap())
         .collect();
-    assert_eq!(chunks.len(), ready);
+    assert_eq!(chunks.len(), speech.len());
     assert!(chunks.len() >= 2, "{chunks:?}");
+    // Each chunk is its own speech and the pause after it, which is never longer than 0.55 s. The
+    // two paragraphs differ by more than that, so chunks in another order would not pass.
+    assert!((speech[0] - speech[1]).abs() > 0.7, "{speech:?}");
+    for (seconds, speech) in chunks.iter().zip(&speech) {
+        assert!(
+            (speech - 0.04..speech + 0.6).contains(seconds),
+            "a chunk of {seconds} s for {speech} s of speech"
+        );
+    }
 
     // The chunks add up to the file: its data holds 16-bit samples after a 44-byte header.
     let rate = summary["sample_rate"].as_f64().unwrap();
