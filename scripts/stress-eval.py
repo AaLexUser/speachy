@@ -59,7 +59,6 @@ import collections
 import dataclasses
 import datetime
 import difflib
-import hashlib
 import itertools
 import json
 import os
@@ -68,7 +67,6 @@ import random
 import re
 import subprocess
 import sys
-import tempfile
 import unicodedata
 import wave
 
@@ -601,7 +599,6 @@ class Listener:
         self.model = Wav2Vec2ForCTC(config).eval()
         # The weights are a pickle. weights_only=True is the restricted unpickler: tensors and plain containers only.
         self.model.load_state_dict(torch.load(found["pytorch_model.bin"], map_location="cpu", weights_only=True))
-        torch.set_num_threads(4)
 
         def ids(test):    # the symbols (not the four special tokens) a slot accepts
             return np.array(sorted(i for p, i in vocab.items() if i > 3 and test(p)))
@@ -855,7 +852,7 @@ def listen(readings: list[Reading], paired: Paired, listener: Listener) -> tuple
         got = [heard[r, e.chunk] for r in range(len(readings))]
         rows.append(Row(
             e.line, e.index, e.sentence, e.gold.text, e.cls, sorted(e.gold.stressed),
-            [sorted(e.spoken.marked), sorted(e.spoken.yo)],
+            [sorted(e.spoken.marked), sorted(e.spoken.yo)], e.chunk,
             [g[e.at][0] if g else 0 for g in got],
             [round(starts[r][e.chunk] + g[e.at][1], 2) if g else round(starts[r][e.chunk], 2) for r, g in enumerate(got)]))
     return rows, sorted(k for k, v in heard.items() if v is None)
@@ -873,6 +870,7 @@ class Row:
     cls: str
     stressed: list[int]        # the vowels the gold allows
     given: list[list[int]]     # what the voice is given: its marked vowels, its ё
+    chunk: int                 # the chunk the word is spoken in, among `Run.given`
     heard: list[int]           # per reading: the vowel heard stressed, 0 when its chunk could not be aligned
     at: list[float]            # per reading: seconds into that reading's WAV where the word begins
 
@@ -889,12 +887,10 @@ class Run:
     commit: str                # of this checkout, `+` when it has changes
     model: str
     voice: str
-    speed: float
     recognizer: str            # name@revision
-    gold_sha256: str
     readings: int
     seconds: float             # of speech, in one reading
-    chunks: int
+    given: list[str]           # every chunk the voice was given, as a line of stress-spoken.txt
     unaligned: list[list[int]]  # [reading, chunk] pairs, both from 0
     rows: list[Row]
 
@@ -918,6 +914,7 @@ class Run:
 # ---- numbers ----------------------------------------------------------------------------------------------------------
 
 DRAWS = 2000
+FEW = 100                  # word readings: with fewer, a share has no range and a change no verdict
 
 
 def resampled(units: list, statistic) -> tuple[float, float]:
@@ -939,7 +936,7 @@ def share(sentences: list[list[int]]) -> float | None:
 # ---- the heard report --------------------------------------------------------------------------------------------------
 
 PEOPLE = ("The same recognizer hears people reading Russian off the gold vowel in 45 of 2,388 words (1.9 %, FLEURS "
-          "recordings,\nmeasured once with the prototype of this instrument), and it misses about one wrong stress in "
+          "recordings,\n  measured once with the prototype of this instrument), and it misses about one wrong stress in "
           "five on other voices.")
 
 
@@ -952,7 +949,7 @@ def rate_line(label: str, rows: list[Row], indent: int = 2) -> str:
     sums = list(per.values())
     off, words = sum(s[0] for s in sums), sum(s[1] for s in sums)
     head = f"{' ' * indent}{label:{29 - indent}}{n(words):>8}{n(off):>7}{share(sums):>8.1f} %"
-    if words < 100:
+    if words < FEW:
         return head + "   (too few words for a range)"
     low, high = resampled(sums, share)
     return f"{head}   ({low:.1f}-{high:.1f})"
@@ -969,7 +966,7 @@ def heard_report(run: Run) -> str:
         f"{count(sentences, 'sentence', 'sentences')}, {run.seconds / 60:.0f} minutes of speech each",
         f"  recognizer {run.recognizer.replace(REVISION, REVISION[:7])}, "
         + ("every chunk aligned" if not run.unaligned else
-           f"{len(run.unaligned)} of {run.chunks * run.readings} chunk readings could not be aligned: their words "
+           f"{len(run.unaligned)} of {len(run.given) * run.readings} chunk readings could not be aligned: their words "
            "count as heard off"),
         "",
         f"  {'':27}{'word':>8}{'heard off the':>14}",
@@ -1006,7 +1003,7 @@ def compare_line(label: str, pairs: list[tuple[Row, Row]]) -> str:
     """Heard-off share in each run for the same words, the difference in points, and its 95 % range from drawing
     sentences again in both runs together."""
     if not pairs:
-        return f"  {label:34}{0:>6}   no such words"
+        return f"  {label:48}{0:>6}   no such words"
     per: dict[str, list[int]] = {}
     for a, b in pairs:
         s = per.setdefault(a.sentence, [0, 0, 0, 0])
@@ -1020,40 +1017,42 @@ def compare_line(label: str, pairs: list[tuple[Row, Row]]) -> str:
         oa, na, ob, nb = (sum(u[i] for u in units) for i in range(4))
         return 100 * (ob / nb - oa / na) if na and nb else None
 
-    value = change(sums)
-    low, high = resampled(sums, change)
-    verdict = "real" if low > 0 or high < 0 else "within noise"
     before, after = (100 * sum(s[i] for s in sums) / sum(s[i + 1] for s in sums) for i in (0, 2))
-    return (f"  {label:34}{len(pairs):>6}{before:>9.1f} %{after:>8.1f} %{signed(value):>8}"
-            f"   ({signed(low)} to {signed(high)})   {verdict}")
+    head = f"  {label:48}{len(pairs):>6}{before:>9.1f} %{after:>8.1f} %{signed(change(sums)):>8}"
+    if min(sum(s[1] for s in sums), sum(s[3] for s in sums)) < FEW:
+        return head + "   (too few words for a range)"
+    low, high = resampled(sums, change)
+    return f"{head}   ({signed(low)} to {signed(high)})   {'real' if low > 0 or high < 0 else 'within noise'}"
 
 
 def compare_report(a: Run, b: Run) -> str:
-    for what in ("model", "voice", "speed", "recognizer"):
+    for what in ("model", "voice", "recognizer"):
         if getattr(a, what) != getattr(b, what):
             raise SystemExit(f"{a.name} and {b.name} cannot be compared: the {what} differs "
                              f"({getattr(a, what)} and {getattr(b, what)}).")
     mine = {(r.sentence, r.index): r for r in a.rows}
-    pairs = [(mine[k], r) for r in b.rows if (k := (r.sentence, r.index)) in mine]
-    different = [p for p in pairs if p[0].cls != p[1].cls or p[0].given != p[1].given]
-    same = [p for p in pairs if p not in different]
+    pairs = [(mine[k], r) for r in b.rows if (k := (r.sentence, r.index)) in mine and mine[k].stressed == r.stressed]
+    unchanged = [p for p in pairs if a.given[p[0].chunk] == b.given[p[1].chunk]]
+    changed = [p for p in pairs if a.given[p[0].chunk] != b.given[p[1].chunk]]
+    different = [p for p in changed if (p[0].cls, p[0].given) != (p[1].cls, p[1].given)]
+    beside = [p for p in changed if (p[0].cls, p[0].given) == (p[1].cls, p[1].given)]
     only = len(a.rows) + len(b.rows) - 2 * len(pairs)
     out = [
         f"Stress heard: {b.name} ({b.commit}) against {a.name} ({a.commit})",
         f"  voice {a.voice}, recognizer {a.recognizer.replace(REVISION, REVISION[:7])}, {a.readings} readings of "
         f"{a.name} and {b.readings} of {b.name}, {count(len(pairs), 'word', 'words')} in both"
-        + (f" ({count(only, 'word is', 'words are')} in only one run: not compared)" if only else ""),
+        + (f" ({only} not compared: in one run only, or the gold changed)" if only else ""),
         "",
-        f"  {'':34}{'':>6}{'heard off the gold vowel':>21}",
-        f"  {'':34}{'words':>6}{a.name:>11}{b.name:>10}   change, in points, with its 95 % range",
+        f"  {'':48}{'':>6}{'heard off the gold vowel':>21}",
+        f"  {'':48}{'words':>6}{a.name:>11}{b.name:>10}   change, in points, with its 95 % range",
         compare_line("all words", pairs),
         compare_line("words Speachy marks differently", different),
-        compare_line("words Speachy marks the same", same),
+        compare_line("words marked the same, in a chunk that changed", beside),
+        compare_line("words in chunks that did not change", unchanged),
         "",
-        "  \"Marks the same\" is the control: those words were given to the voice as before, so its line shows what",
-        "  two runs look like when they did not change. It is not perfect: a word is read in a chunk with others",
-        "  whose marks did change, and one range in twenty excludes zero by chance. A line is real when its range",
-        "  does not reach zero.",
+        "  The last line is the control. The voice was given those chunks letter for letter the same in both runs, so",
+        "  the line shows how much two runs differ when nothing changed. A line is real when its range does not reach",
+        "  zero; one range in twenty does that by chance.",
     ]
     return "\n".join(out)
 
@@ -1150,8 +1149,8 @@ def heard(name: str, cli: str | None, home: str | None, voice: str | None, readi
     run = Run(
         name, datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC"), version, git_state(),
         ",".join(sorted({c["model_id"] for c in chunks})), ",".join(sorted({f"{c['model_id']}/{c['voice_id']}" for c in chunks})),
-        1.0, f"{RECOGNIZER}@{REVISION}", hashlib.sha256(read_file(GOLD_FILE).encode()).hexdigest(), readings,
-        sum(reads[0].chunk_seconds), len(chunks), [list(k) for k in unaligned], rows)
+        f"{RECOGNIZER}@{REVISION}", readings, sum(reads[0].chunk_seconds), given_lines(chunks),
+        [list(k) for k in unaligned], rows)
     run.save()
     print(marks_report(paired, None, None), "", heard_report(run), sep="\n")
     return 0

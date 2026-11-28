@@ -205,15 +205,20 @@ What the numbers mean. A word "heard off the gold vowel" is not a word stressed
 wrongly: the same recognizer hears people off the gold vowel in 1.9 % of words,
 and it misses about one wrong stress in five on other voices. The share is a
 rate over many words, not a verdict on one, and two readings of one text differ
-on a few words in a hundred. Judge a change with `compare`, not by eye: it pairs
-two runs word by word, refuses runs with another voice, model, speed or
-recognizer revision, and prints three lines. "Words Speachy marks differently"
-is where a change can show; "words Speachy marks the same" is the control, and
-should say "within noise". It is a control for noise, not a proof: those words
-share chunks with words whose marks did change, so once in a while it says
-"real" (it did, by 4.7 points, between a build and one that marks nothing). "Real" means the 95 % range of the difference excludes
-zero. A change of under about 1.5 points overall, or about 9 points in a group
-of 100 words, cannot be seen this way; `marks` shows it exactly.
+on a few words in a hundred.
+
+Judge a change with `compare`, not by eye. It pairs two runs word by word,
+refuses runs with another voice, model or recognizer revision, and prints four
+lines: all words, the words Speachy marks differently, the words marked the same
+in a chunk that changed, and the words in chunks that did not change. The last
+is the control: the voice was given those chunks letter for letter the same in
+both runs, so its line shows what two runs look like when nothing changed, and
+it should say "within noise". "Real" means the 95 % range of the difference
+excludes zero; one range in twenty does that by chance. Two runs of one build
+differed by 0.1 points over all 1,817 words, with a range of 0.5 points either
+way, so a smaller change overall cannot be seen this way, and in a group of
+about 120 words the range is 5 points either way; `marks` shows such a change
+exactly. A group of fewer than 100 word readings gets no range.
 
 The script reads `tests/fixtures/stress-spoken.txt`, which is what the engine
 gives the voice for the gold read as one document. `tests/stress.rs` fails
