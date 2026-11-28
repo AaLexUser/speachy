@@ -131,7 +131,7 @@ fn the_gold_sentences_are_given_to_the_voice_as_the_fixture_says() {
     );
 
     let now = spoken_file(&chunks);
-    if std::env::var_os("SPEACHY_BLESS").is_some() {
+    if std::env::var("SPEACHY_BLESS").as_deref() == Ok("1") {
         std::fs::write(SPOKEN, &now).expect("write stress-spoken.txt");
         return;
     }
