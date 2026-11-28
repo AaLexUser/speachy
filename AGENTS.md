@@ -140,12 +140,16 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace          # or: -p speachy-core -p speachy-cli without the GUI libraries
 scripts/check-layers.sh
+python3 scripts/stress-eval.py marks   # Russian stress marks against the gold: a second, no models
 ```
 
 - `crates/speachy-core/tests/pipeline.rs` tests the pipeline with a fake
   synthesizer and a virtual sound card: ordering, gapless output, the
   look-ahead bound, pause, stop, replacement, shutdown.
 - `crates/speachy-core/tests/session.rs` tests the command surface.
+- `crates/speachy-core/tests/stress.rs` holds `tests/fixtures/stress-spoken.txt`
+  to what the engine gives the voice for the sentences of
+  `tests/fixtures/stress-gold.txt`.
 - `crates/speachy-core/tests/captions.rs` holds word timing to its measured
   accuracy on recordings in `tests/fixtures/captions.json`
   (`scripts/make-caption-fixtures.py` makes them; it needs the models).
@@ -157,6 +161,38 @@ scripts/check-layers.sh
 
 Timing-sensitive tests must hold on a slow, loaded machine: derive waits
 from events, not from sleeps, and leave wide margins.
+
+## Russian stress: the eval
+
+`crates/speachy-core/tests/fixtures/stress-gold.txt` holds Russian sentences
+with the stress of every word marked; its header gives the rules and says who
+placed the marks and that no native speaker has checked them.
+`scripts/stress-eval.py` measures Speachy against it. Today it has one command, `marks`: exact, text against text, no
+model, standard library only, and it runs in CI. For every word of two or more
+vowels it says whether Speachy marked the gold vowel, marked another vowel,
+left the word to the voice, read it as another language, or rewrote it. A word
+marked on another vowel is an error in the stress table or in the gold; a
+person settles each and fixes it where it is. What the voice is *heard* to say
+is not measured yet.
+
+The script reads `tests/fixtures/stress-spoken.txt`, which is what the engine
+gives the voice for the gold read as one document. `tests/stress.rs` fails
+until that file equals the code, so a change cannot land without it. After a
+change to `stress.rs`, `russian.rs`, the stress table or chunking:
+
+```sh
+SPEACHY_BLESS=1 cargo test -p speachy-core --test stress   # rewrite stress-spoken.txt
+python3 scripts/stress-eval.py marks --since main          # what the change did, word by word
+```
+
+Put the output in the pull request. Never edit `stress-spoken.txt` by hand.
+
+To add a sentence, append it to the gold with no marks, run the two commands
+above in that order, and the script refuses it with a draft: the sentence as
+Speachy marks it, and the words Speachy left alone. Correct the draft against
+the meaning of the sentence, put it in the gold, and run the commands again.
+A sentence joins before anyone has heard Speachy read it, never because a word
+in it was heard wrong, or the result stops being a rate.
 
 ## Things to know
 
