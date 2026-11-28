@@ -292,17 +292,23 @@ def classify(gold: Word, spoken: Word | None, lang: str | None) -> str:
     return ON_GOLD if spoken.stressed <= gold.stressed and not lost_yo else ON_OTHER
 
 
+def scored(line: GoldLine) -> list[int]:
+    return [i for i, word in enumerate(line.words) if word.vowels >= 2]
+
+
 def answered(line: GoldLine, found: dict[int, int]) -> bool:
     """Whether the spoken block is this sentence's. The spoken file is made from the gold, so a block that answers
-    fewer than half of the sentence's words belongs to another sentence: the fixture is stale. Rewriting replaces a
-    few words of a sentence, never most of them."""
-    return 2 * len(found) >= len(line.words)
+    fewer than three quarters of the sentence's words of two or more vowels belongs to another sentence: the fixture
+    is stale. Rewriting replaces numbers and short abbreviations, which have fewer vowels, so those words are all
+    but always answered in a sentence's own block."""
+    return 4 * sum(i in found for i in scored(line)) >= 3 * len(scored(line))
 
 
 def stale_block(line: GoldLine, found: dict[int, int], where: str) -> StaleSpoken:
     return StaleSpoken(
-        f"{where}, line {line.number}: only {len(found)} of its {len(line.words)} words are answered in its block of "
-        f"{SPOKEN_FILE}:\n  {line.bare}\nThe spoken file is stale."
+        f"{where}, line {line.number}: only {sum(i in found for i in scored(line))} of its {len(scored(line))} words "
+        f"of two or more vowels are answered in its block of {SPOKEN_FILE}:\n  {line.bare}\n"
+        "The spoken file is stale."
     )
 
 
