@@ -165,9 +165,9 @@ from events, not from sleeps, and leave wide margins.
 ## Russian stress: the eval
 
 `crates/speachy-core/tests/fixtures/stress-gold.txt` holds Russian sentences
-with the stress of every word written down by a person; its header gives the
-rules and says who placed the marks. `scripts/stress-eval.py` measures Speachy
-against it. Today it has one command, `marks`: exact, text against text, no
+with the stress of every word marked; its header gives the rules and says who
+placed the marks and that no native speaker has checked them.
+`scripts/stress-eval.py` measures Speachy against it. Today it has one command, `marks`: exact, text against text, no
 model, standard library only, and it runs in CI. For every word of two or more
 vowels it says whether Speachy marked the gold vowel, marked another vowel,
 left the word to the voice, read it as another language, or rewrote it. A word

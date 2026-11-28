@@ -4,7 +4,7 @@
     scripts/stress-eval.py marks [--since REV] [--list CLASS]
 
 The truth is `crates/speachy-core/tests/fixtures/stress-gold.txt`: Russian sentences with the stress of every word
-written down by a person. Its rules are in its header, and this script checks them first.
+marked. Its header gives the rules, and says who placed the marks; this script checks the rules first.
 
 `marks` is exact. It compares the gold with `stress-spoken.txt` beside it: the text Speachy gives the voice for those
 sentences, which a test (`crates/speachy-core/tests/stress.rs`) keeps equal to the code. Every gold word with two or
