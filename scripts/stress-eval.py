@@ -78,6 +78,8 @@ class Word:
     key: str                   # lower case, marks removed, ё as е: the same word in the gold and in the spoken text
     vowels: int
     stressed: frozenset[int]   # vowels (from 1) that carry the stress: after a U+0301, or ё when the word has no mark
+    marked: frozenset[int]     # vowels (from 1) followed by a U+0301
+    yo: frozenset[int]         # vowels (from 1) written ё
 
 
 def is_cyrillic(c: str) -> bool:
@@ -111,7 +113,7 @@ def word_of(text: str) -> Word:
             marked.add(vowels)
         previous = c
     key = text.lower().replace(ACUTE, "").replace("ё", "е")
-    return Word(text, key, vowels, frozenset(marked or yo))
+    return Word(text, key, vowels, frozenset(marked or yo), frozenset(marked), frozenset(yo))
 
 
 def words_of(line: str) -> list[Word]:
@@ -122,7 +124,7 @@ def words_of(line: str) -> list[Word]:
 
 @dataclasses.dataclass(frozen=True)
 class Violation:
-    rule: int | None           # a key of RULES
+    rule: int                  # a key of RULES
     what: str
     missing_mark: bool = False  # rule 2 broken by a word with no mark at all: the case a draft helps with
 
@@ -241,15 +243,18 @@ class Entry:
     sentence: str              # the sentence without marks: with `index` it names the word across revisions
     gold: Word
     spoken: Word | None        # None: rewritten
-    lang: str | None
     cls: str
+
+    @property
+    def given(self) -> tuple[frozenset[int], frozenset[int]] | None:
+        """What the voice is given for the word: its marked vowels and its ё. None when Speachy rewrote it."""
+        return None if self.spoken is None else (self.spoken.marked, self.spoken.yo)
 
 
 @dataclasses.dataclass(frozen=True)
 class Added:
     line: int
     word: Word
-    lang: str
 
 
 @dataclasses.dataclass
@@ -258,7 +263,7 @@ class Paired:
     sentences: int
     gold_words: int
     entries: list[Entry]       # every gold word of two or more vowels
-    added: list[Added]         # words of two or more vowels Speachy wrote for numbers and units
+    added: list[Added]         # words of two or more vowels Speachy wrote where it rewrote the text
 
     def of(self, cls: str) -> list[Entry]:
         return [e for e in self.entries if e.cls == cls]
@@ -283,30 +288,49 @@ def classify(gold: Word, spoken: Word | None, lang: str | None) -> str:
         return LANGUAGE
     if not spoken.stressed:
         return LEFT
-    return ON_GOLD if spoken.stressed <= gold.stressed else ON_OTHER
+    lost_yo = gold.yo & (spoken.stressed - spoken.yo)   # an accent on е where the gold has ё: the voice says е
+    return ON_GOLD if spoken.stressed <= gold.stressed and not lost_yo else ON_OTHER
 
 
-def pair(gold: list[GoldLine], spoken: list[list[Chunk]]) -> Paired:
+def answered(line: GoldLine, found: dict[int, int]) -> bool:
+    """Whether the spoken block is this sentence's. The spoken file is made from the gold, so a block that answers
+    fewer than half of the sentence's words belongs to another sentence: the fixture is stale. Rewriting replaces a
+    few words of a sentence, never most of them."""
+    return 2 * len(found) >= len(line.words)
+
+
+def stale_block(line: GoldLine, found: dict[int, int], where: str) -> StaleSpoken:
+    return StaleSpoken(
+        f"{where}, line {line.number}: only {len(found)} of its {len(line.words)} words are answered in its block of "
+        f"{SPOKEN_FILE}:\n  {line.bare}\nThe spoken file is stale."
+    )
+
+
+def pair(gold: list[GoldLine], spoken: list[list[Chunk]], where: str = GOLD_FILE) -> Paired:
+    if not gold:
+        raise SystemExit(f"{where} has no sentences.")
     if len(gold) != len(spoken):
         raise StaleSpoken(
-            f"the gold has {len(gold)} sentences and {SPOKEN_FILE} has {len(spoken)}: the spoken file is stale."
+            f"{where} has {len(gold)} sentences and {SPOKEN_FILE} has {len(spoken)}: the spoken file is stale."
         )
     entries, added, total = [], [], 0
     for line, chunks in zip(gold, spoken):
         heard, langs = spoken_words(chunks)
         found = match(line.words, heard)
+        if not answered(line, found):
+            raise stale_block(line, found, where)
         total += len(line.words)
         for i, word in enumerate(line.words):
             if word.vowels >= 2:
                 j = found.get(i)
                 s, lang = (heard[j], langs[j]) if j is not None else (None, None)
-                entries.append(Entry(line.number, i, line.bare, word, s, lang, classify(word, s, lang)))
+                entries.append(Entry(line.number, i, line.bare, word, s, classify(word, s, lang)))
         matched = set(found.values())
-        added += [Added(line.number, w, langs[j]) for j, w in enumerate(heard) if j not in matched and w.vowels >= 2]
+        added += [Added(line.number, w) for j, w in enumerate(heard) if j not in matched and w.vowels >= 2]
     return Paired({line.bare for line in gold}, len(gold), total, entries, added)
 
 
-# ---- the draft of a new sentence --------------------------------------------------------------------------------------
+# ---- the draft of a new sentence -------------------------------------------------------------------------------------
 
 def draft(line: GoldLine, chunks: list[Chunk]) -> tuple[str, list[str]]:
     """`line` as Speachy marks it: the marks the spoken file has for the words that have none, and ё where Speachy
@@ -328,7 +352,8 @@ def draft(line: GoldLine, chunks: list[Chunk]) -> tuple[str, list[str]]:
                     n += 1
                     if n == at:
                         keep = "ё" if "ё" in theirs.text.lower() and ACUTE not in theirs.text else c
-                        text = text[:k] + (keep.upper() if c.isupper() else keep) + (ACUTE if keep == c else "") + text[k + 1:]
+                        letter = keep.upper() if c.isupper() else keep
+                        text = text[:k] + letter + (ACUTE if keep == c else "") + text[k + 1:]
                         break
         elif needs:
             left.append(word.text)
@@ -340,19 +365,44 @@ def draft(line: GoldLine, chunks: list[Chunk]) -> tuple[str, list[str]]:
 
 # ---- reading the files, now and at another revision -----------------------------------------------------------------
 
-def show(rev: str, path: str) -> str:
-    done = subprocess.run(["git", "show", f"{rev}:{path}"], cwd=ROOT, capture_output=True, text=True)
+def decode(data: bytes, name: str) -> str:
+    try:
+        return data.decode("utf-8").replace("\r\n", "\n")
+    except UnicodeDecodeError as err:
+        raise SystemExit(f"{name} is not UTF-8: byte {err.start} cannot be read.") from None
+
+
+def read_file(path: str) -> str:
+    try:
+        return decode((ROOT / path).read_bytes(), path)
+    except OSError as err:
+        raise SystemExit(f"cannot read {path}: {err.strerror}") from None
+
+
+def git(*args: str) -> subprocess.CompletedProcess[bytes]:
+    try:
+        return subprocess.run(["git", *args], cwd=ROOT, capture_output=True)
+    except OSError as err:
+        raise SystemExit(f"--since needs git: {err.strerror}") from None
+
+
+def resolve(rev: str) -> str:
+    """The commit REV names, as a full hash. `--end-of-options` keeps a REV that starts with `-` from being read as
+    an option, and the hash cannot start with `-` either."""
+    done = git("rev-parse", "--verify", "--quiet", "--end-of-options", f"{rev}^{{commit}}")
     if done.returncode:
-        raise SystemExit(f"{rev} has no {path}: {done.stderr.strip()}")
-    return done.stdout
+        raise SystemExit(f"--since {rev}: no such revision in this repository.")
+    return done.stdout.decode().strip()
 
 
-def short(rev: str) -> str:
-    done = subprocess.run(["git", "rev-parse", "--short", rev], cwd=ROOT, capture_output=True, text=True)
-    return done.stdout.strip() or rev
+def show(commit: str, path: str) -> str:
+    done = git("show", f"{commit}:{path}")
+    if done.returncode:
+        raise SystemExit(f"{commit[:12]} has no {path}: {done.stderr.decode(errors='replace').strip()}")
+    return decode(done.stdout, f"{path} at {commit[:12]}")
 
 
-# ---- the report -------------------------------------------------------------------------------------------------------
+# ---- the report ------------------------------------------------------------------------------------------------------
 
 def n(count: int) -> str:
     return f"{count:,}"
@@ -367,12 +417,17 @@ def table(paired: Paired) -> list[str]:
     return rows
 
 
-def word_rows(entries: list[Entry], limit: int | None) -> list[str]:
-    rows = [f"     {'line':>4}  {'gold':18}{'Speachy':18}"]
+def count(k: int, one: str, many: str) -> str:
+    return f"{n(k)} {one if k == 1 else many}"
+
+
+def word_rows(entries: list[Entry], limit: int | None, indent: int = 5) -> list[str]:
+    pad = " " * indent
+    rows = [f"{pad}{'line':>4}  {'gold':18}{'Speachy':18}"]
     for e in entries[:limit]:
-        rows.append(f"     {e.line:>4}  {e.gold.text:18}{e.spoken.text if e.spoken else '-':18}")
+        rows.append(f"{pad}{e.line:>4}  {e.gold.text:18}{e.spoken.text if e.spoken else '-':18}")
     if limit is not None and len(entries) > limit:
-        rows.append(f"     ... {len(entries) - limit} more (--list prints all)")
+        rows.append(f"{pad}... {len(entries) - limit} more (--list prints all)")
     return rows
 
 
@@ -380,48 +435,56 @@ def key(e: Entry) -> tuple[str, int]:
     return (e.sentence, e.index)
 
 
-def marks_report(now: Paired, before: Paired | None, since: str | None) -> str:
+def marks_report(now: Paired, before: Paired | None, since: tuple[str, str] | None) -> str:
     multi = len(now.entries)
     scored = sum(len(now.of(c)) for c in SCORED)
     out = [
         "Stress marks: what Speachy gives the voice, against the gold",
-        f"  gold     {n(now.sentences)} sentences, {n(now.gold_words)} words, {n(multi)} with two or more vowels",
-        f"  scored   {n(scored)} of them. {n(len(now.of(REWRITTEN)))} are rewritten before they are read and leave no word to score.",
-        f"           Speachy adds {n(len(now.added))} words of its own for numbers and units. The gold has no stress for them.",
+        f"  gold     {count(now.sentences, 'sentence', 'sentences')}, {count(now.gold_words, 'word', 'words')}, "
+        f"{n(multi)} with two or more vowels",
+        f"  scored   {n(scored)} of them. {count(len(now.of(REWRITTEN)), 'word is', 'words are')} rewritten before "
+        "being read and cannot be scored.",
+        f"           Speachy adds {count(len(now.added), 'word', 'words')} of two or more vowels of its own where it "
+        "rewrites the text (numbers and units, among others).",
+        "           The gold has no stress for them.",
         "",
         *table(now),
     ]
     other = now.of(ON_OTHER)
     if other:
-        out += ["", f"  Marked on another vowel: each is an error in the stress table or in the gold, to be settled by a person.",
-                *word_rows(other, 20)]
+        out += ["", "  Marked on another vowel: each is an error in the stress table or in the gold, "
+                "to be settled by a person.", *word_rows(other, 20)]
     if before is not None:
-        out += ["", *since_report(now, before, since or "")]
+        out += ["", *since_report(now, before, *since)]
     return "\n".join(out)
 
 
-def since_report(now: Paired, before: Paired, rev: str) -> list[str]:
+def since_report(now: Paired, before: Paired, rev: str, commit: str) -> list[str]:
+    """A word is marked differently when its class changed or what the voice is given for it changed, so a mark that
+    moves from one vowel to another inside a class counts."""
     was = {key(e): e for e in before.entries}
-    moved = [(was[key(e)], e) for e in now.entries if key(e) in was and was[key(e)].cls != e.cls]
-    head = f"Since {rev} ({short(rev)})"
+    moved = [(was[key(e)], e) for e in now.entries
+             if key(e) in was and (was[key(e)].cls != e.cls or was[key(e)].given != e.given)]
+    head = f"Since {rev} ({commit[:12]})"
     if not moved:
         out = [f"{head}: no word is marked differently."]
     else:
-        out = [f"{head}: {n(len(moved))} words are marked differently."]
+        out = [f"{head}: {count(len(moved), 'word is', 'words are')} marked differently."]
         for cls in CLASS_LABEL:
             a, b = len(before.of(cls)), len(now.of(cls))
             if a or b:
                 out.append(f"  {CLASS_LABEL[cls]:27}{n(a):>7} -> {n(b):>5}   ({b - a:+,})")
-        out.append("  moved between classes:")
+        out.append("  moved:")
         counts = collections.Counter((a.cls, b.cls) for a, b in moved)
-        for (a, b), count in sorted(counts.items(), key=lambda kv: -kv[1]):
-            out.append(f"     {n(count):>5}  {CLASS_LABEL[a]} -> {CLASS_LABEL[b]}")
+        for (a, b), k in sorted(counts.items(), key=lambda kv: -kv[1]):
+            how = f"{CLASS_LABEL[a]}, a different vowel now" if a == b else f"{CLASS_LABEL[a]} -> {CLASS_LABEL[b]}"
+            out.append(f"     {n(k):>5}  {how}")
         arrived = [b for a, b in moved if b.cls == ON_OTHER]
         if arrived:
             out += ["  now marked on another vowel:", *word_rows(arrived, 30)]
     new, gone = len(now.bare - before.bare), len(before.bare - now.bare)
     if new or gone:
-        out.append(f"  The gold changed: {new} sentences are new, {gone} are gone. "
+        out.append(f"  The gold changed: {count(new, 'sentence is', 'sentences are')} new, {n(gone)} gone. "
                    "Their words are in the counts and not among the words marked differently.")
     return out
 
@@ -429,12 +492,12 @@ def since_report(now: Paired, before: Paired, rev: str) -> list[str]:
 def list_report(now: Paired, cls: str) -> str:
     if cls == "added":
         rows = [f"  {'line':>4}  {'Speachy wrote':18}"] + [f"  {a.line:>4}  {a.word.text:18}" for a in now.added]
-        return "\n".join(rows)
+        return f"Words Speachy wrote: {n(len(now.added))}\n" + "\n".join(rows)
     entries = now.of(cls)
-    return f"{CLASS_LABEL[cls]}: {n(len(entries))} words\n" + "\n".join(row[3:] for row in word_rows(entries, None))
+    return f"{CLASS_LABEL[cls]}: {count(len(entries), 'word', 'words')}\n" + "\n".join(word_rows(entries, None, 2))
 
 
-# ---- command line -----------------------------------------------------------------------------------------------------
+# ---- command line ----------------------------------------------------------------------------------------------------
 
 def fail_rules(gold: list[GoldLine], bad: GoldLine, spoken_text: str) -> str:
     first = bad.violations[0]
@@ -446,10 +509,14 @@ def fail_rules(gold: list[GoldLine], bad: GoldLine, spoken_text: str) -> str:
     out.append(f"Rule {first.rule}: {RULES[first.rule]}")
     if any(v.missing_mark for v in bad.violations):
         sentences = read_spoken(spoken_text)
-        if len(sentences) != len(gold):
+        block = sentences[gold.index(bad)] if len(sentences) == len(gold) else None
+        found = match(bad.words, spoken_words(block)[0]) if block else {}
+        if block is None:
             out += ["", f"No draft: {SPOKEN_FILE} does not have this sentence yet. Remake it first: {BLESS}"]
+        elif not answered(bad, found):
+            out += ["", f"No draft: its block of {SPOKEN_FILE} is not this sentence's. Remake it first: {BLESS}"]
         else:
-            text, left = draft(bad, sentences[gold.index(bad)])
+            text, left = draft(bad, block)
             out += ["", "Speachy marks the sentence like this, a draft to check against its meaning and correct:",
                     f"  {text}"]
             if left:
@@ -458,8 +525,8 @@ def fail_rules(gold: list[GoldLine], bad: GoldLine, spoken_text: str) -> str:
 
 
 def marks(since: str | None, list_class: str | None) -> int:
-    gold_text = (ROOT / GOLD_FILE).read_text(encoding="utf-8")
-    spoken_text = (ROOT / SPOKEN_FILE).read_text(encoding="utf-8")
+    commit = resolve(since) if since else None
+    gold_text, spoken_text = read_file(GOLD_FILE), read_file(SPOKEN_FILE)
     gold = read_gold(gold_text)
     bad = [line for line in gold if line.violations]
     if bad:
@@ -469,21 +536,27 @@ def marks(since: str | None, list_class: str | None) -> int:
         return 1
     try:
         now = pair(gold, read_spoken(spoken_text))
-        before = None
-        if since:
-            old_gold = read_gold(show(since, GOLD_FILE))
-            before = pair(old_gold, read_spoken(show(since, SPOKEN_FILE)))
     except StaleSpoken as err:
         print(f"{err}\nRemake it: {BLESS}", file=sys.stderr)
         return 1
+    before = None
+    if commit:
+        where = f"{GOLD_FILE} at {commit[:12]}"
+        try:
+            before = pair(read_gold(show(commit, GOLD_FILE)), read_spoken(show(commit, SPOKEN_FILE)), where)
+        except StaleSpoken as err:
+            print(f"{err}\nThe files at {since} do not belong together; use another revision.", file=sys.stderr)
+            return 1
     if list_class:
         print(list_report(now, list_class))
     else:
-        print(marks_report(now, before, since))
+        print(marks_report(now, before, (since, commit) if since and commit else None))
     return 0
 
 
 def main(argv: list[str]) -> int:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     commands = parser.add_subparsers(dest="command", required=True)
     m = commands.add_parser("marks", help="what Speachy marks, against the gold: exact, no models")
